@@ -1,0 +1,16 @@
+[project]
+name = "databus-sim"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "celery[redis]>=5.5.3",
+    "folium>=0.12",
+    "geopandas>=1.1.1",
+    "mapclassify>=2.10.0",
+    "matplotlib>=3.10.7",
+    "paho-mqtt>=2.1.0",
+    "pandas>=2.3.3",
+    "requests>=2.32.5",
+]

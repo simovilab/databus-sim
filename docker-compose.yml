@@ -1,0 +1,60 @@
+version: '3.8'
+
+services:
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+  app:
+    build: .
+    volumes:
+      - .:/app
+      - ./assets:/app/assets
+    environment:
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/0
+    depends_on:
+      redis:
+        condition: service_healthy
+    ports:
+      - "8000:8000"
+    command: uv run python main.py
+
+  celery_worker:
+    build: .
+    volumes:
+      - .:/app
+      - ./assets:/app/assets
+    environment:
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/0
+    depends_on:
+      redis:
+        condition: service_healthy
+    command: uv run celery -A tasks worker --loglevel=info
+    restart: unless-stopped
+
+  celery_beat:
+    build: .
+    volumes:
+      - .:/app
+      - ./assets:/app/assets
+    environment:
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/0
+    depends_on:
+      redis:
+        condition: service_healthy
+    command: uv run celery -A tasks beat --loglevel=info
+    restart: unless-stopped
+
+volumes:
+  redis_data:
