@@ -1,0 +1,43 @@
+# ============================================================
+# Archivo de configuración del escenario de simulación
+# ============================================================
+
+# Lista de rutas que se incluirán en el escenario (según routes.txt)
+routes:
+  - "bUCR_L1"
+  - "bUCR_L2"
+
+# Lista de identificadores de servicio (service_id) a incluir (según trips.txt)
+service_id:
+  - "entresemana"
+
+# Indica si se deben incluir datos de frecuencias (frequencies.txt)
+frequencies_enabled: true
+
+# Parámetros opcionales adicionales
+simulation:
+  start_time: "06:00:00"   # Hora inicial de la simulación
+  end_time: "22:00:00"     # Hora final de la simulación
+  time_step: 60            # Paso de simulación en segundos
+  output_dir: "./databus-sim"   # Carpeta donde guardar resultados
+
+# Metadatos del escenario
+metadata:
+  name: "Escenario base UCR"
+  description: "Simulación de rutas bUCR_L1 y bUCR_L2 con servicio entre semana."
+  version: "1.0"
+
+# Configuración de perturbaciones en el escenario
+perturbations:
+  delay:
+    enabled: true
+    mean: 30          # segundos
+    stddev: 10        # variabilidad
+  detour:
+    enabled: false
+    routes: ["UCR-Estadio"]
+    extra_distance_m: 200
+  holding:
+    enabled: true
+    stops: ["Terminal UCR"]
+    hold_time_s: 15

@@ -1,0 +1,4 @@
+tick,vehicle_id,total_distance,total_time,stops_made,average_speed,current_speed,is_dwelling,dwell_time_remaining
+1,V0,1e-05,1.0,0,0.0,1e-05,False,0
+1,V1,1e-05,1.0,0,0.0,1e-05,False,0
+1,V2,1e-05,1.0,0,0.0,1e-05,False,0
