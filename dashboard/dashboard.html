@@ -1,0 +1,293 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Real-Time Vehicle Tracking</title>
+    
+    <!-- Leaflet CSS -->
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background-color: #f5f5f5;
+        }
+        
+        #map {
+            height: 100vh;
+            width: 100%;
+        }
+        
+        .info-panel {
+            position: absolute;
+            top: 10px;
+            right: 10px;
+            background: white;
+            padding: 15px;
+            border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.2);
+            z-index: 1000;
+            max-width: 300px;
+        }
+        
+        .info-panel h2 {
+            margin-bottom: 10px;
+            font-size: 18px;
+            color: #333;
+        }
+        
+        .status {
+            display: flex;
+            align-items: center;
+            margin-bottom: 10px;
+        }
+        
+        .status-indicator {
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            margin-right: 8px;
+        }
+        
+        .status-indicator.connected {
+            background-color: #4CAF50;
+        }
+        
+        .status-indicator.disconnected {
+            background-color: #f44336;
+        }
+        
+        .vehicle-count {
+            font-size: 14px;
+            color: #666;
+            margin-top: 5px;
+        }
+        
+        .vehicle-list {
+            max-height: 200px;
+            overflow-y: auto;
+            margin-top: 10px;
+            font-size: 12px;
+        }
+        
+        .vehicle-item {
+            padding: 5px;
+            margin: 3px 0;
+            background: #f9f9f9;
+            border-radius: 4px;
+            cursor: pointer;
+        }
+        
+        .vehicle-item:hover {
+            background: #e3f2fd;
+        }
+    </style>
+</head>
+<body>
+    <div id="map"></div>
+    
+    <div class="info-panel">
+        <h2>Vehicle Tracking</h2>
+        <div class="status">
+            <div class="status-indicator" id="statusIndicator"></div>
+            <span id="statusText">Connecting...</span>
+        </div>
+        <div class="vehicle-count">
+            Active vehicles: <strong id="vehicleCount">0</strong>
+        </div>
+        <div class="vehicle-list" id="vehicleList"></div>
+    </div>
+
+    <!-- Leaflet JS -->
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    
+    <!-- MQTT.js via CDN -->
+    <script src="https://unpkg.com/mqtt@5.3.4/dist/mqtt.min.js"></script>
+    
+    <script>
+        // Initialize the map
+        const map = L.map('map').setView([9.9281, -84.0907], 13); // Default to Costa Rica coordinates
+        
+        // Add OpenStreetMap tiles
+        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+            attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
+            maxZoom: 19
+        }).addTo(map);
+        
+        // Store vehicle markers and data
+        const vehicles = new Map();
+        
+        // Custom icon for vehicles
+        const vehicleIcon = L.divIcon({
+            className: 'vehicle-marker',
+            html: '<div style="background-color: #2196F3; width: 16px; height: 16px; border-radius: 50%; border: 3px solid white; box-shadow: 0 2px 5px rgba(0,0,0,0.3);"></div>',
+            iconSize: [22, 22],
+            iconAnchor: [11, 11]
+        });
+        
+        // Update status indicator
+        function updateStatus(connected) {
+            const indicator = document.getElementById('statusIndicator');
+            const text = document.getElementById('statusText');
+            
+            if (connected) {
+                indicator.className = 'status-indicator connected';
+                text.textContent = 'Connected';
+            } else {
+                indicator.className = 'status-indicator disconnected';
+                text.textContent = 'Disconnected';
+            }
+        }
+        
+        // Update vehicle count
+        function updateVehicleCount() {
+            document.getElementById('vehicleCount').textContent = vehicles.size;
+        }
+        
+        // Update vehicle list
+        function updateVehicleList() {
+            const list = document.getElementById('vehicleList');
+            list.innerHTML = '';
+            
+            vehicles.forEach((data, vehicleId) => {
+                const item = document.createElement('div');
+                item.className = 'vehicle-item';
+                item.innerHTML = `
+                    <strong>${vehicleId}</strong><br>
+                    Route: ${data.route_id}<br>
+                    Trip: ${data.trip_id}
+                `;
+                item.onclick = () => {
+                    map.setView([data.lat, data.lon], 16);
+                    data.marker.openPopup();
+                };
+                list.appendChild(item);
+            });
+        }
+        
+        // Update or create vehicle marker
+        function updateVehicle(data) {
+            const { lat, lon, trip_id, route_id, vehicle_id } = data;
+            
+            if (!lat || !lon || !vehicle_id) {
+                console.warn('Invalid data received:', data);
+                return;
+            }
+            
+            const position = [parseFloat(lat), parseFloat(lon)];
+            
+            if (vehicles.has(vehicle_id)) {
+                // Update existing marker
+                const vehicleData = vehicles.get(vehicle_id);
+                vehicleData.marker.setLatLng(position);
+                vehicleData.marker.setPopupContent(`
+                    <strong>Vehicle ${vehicle_id}</strong><br>
+                    Route: ${route_id}<br>
+                    Trip: ${trip_id}<br>
+                    Position: ${lat.toFixed(6)}, ${lon.toFixed(6)}
+                `);
+                vehicleData.lat = lat;
+                vehicleData.lon = lon;
+                vehicleData.trip_id = trip_id;
+                vehicleData.route_id = route_id;
+            } else {
+                // Create new marker
+                const marker = L.marker(position, { icon: vehicleIcon })
+                    .addTo(map)
+                    .bindPopup(`
+                        <strong>Vehicle ${vehicle_id}</strong><br>
+                        Route: ${route_id}<br>
+                        Trip: ${trip_id}<br>
+                        Position: ${lat.toFixed(6)}, ${lon.toFixed(6)}
+                    `);
+                
+                vehicles.set(vehicle_id, {
+                    marker,
+                    lat,
+                    lon,
+                    trip_id,
+                    route_id
+                });
+                
+                // Auto-center map on first vehicle
+                if (vehicles.size === 1) {
+                    map.setView(position, 14);
+                }
+            }
+            
+            updateVehicleCount();
+            updateVehicleList();
+        }
+        
+        // Connect to MQTT broker via WebSocket
+        const brokerUrl = 'ws://mqtt.simovi.org:1883';
+        const topic = 'vehicle/location/#'; // Subscribe to all vehicle location updates
+        
+        console.log('Connecting to MQTT broker:', brokerUrl);
+        
+        const client = mqtt.connect(brokerUrl, {
+            reconnectPeriod: 5000,
+            connectTimeout: 30000
+        });
+        
+        client.on('connect', () => {
+            console.log('Connected to MQTT broker');
+            updateStatus(true);
+            
+            // Subscribe to vehicle location topic
+            client.subscribe(topic, (err) => {
+                if (err) {
+                    console.error('Subscription error:', err);
+                } else {
+                    console.log('Subscribed to topic:', topic);
+                }
+            });
+        });
+        
+        client.on('message', (topic, message) => {
+            try {
+                const data = JSON.parse(message.toString());
+                console.log('Received message:', topic, data);
+                updateVehicle(data);
+            } catch (error) {
+                console.error('Error parsing message:', error, message.toString());
+            }
+        });
+        
+        client.on('error', (error) => {
+            console.error('MQTT error:', error);
+            updateStatus(false);
+        });
+        
+        client.on('close', () => {
+            console.log('MQTT connection closed');
+            updateStatus(false);
+        });
+        
+        client.on('reconnect', () => {
+            console.log('Reconnecting to MQTT broker...');
+        });
+        
+        // Clean up old vehicles (optional - removes vehicles not seen in 5 minutes)
+        setInterval(() => {
+            const now = Date.now();
+            vehicles.forEach((data, vehicleId) => {
+                if (data.lastUpdate && (now - data.lastUpdate) > 300000) {
+                    map.removeLayer(data.marker);
+                    vehicles.delete(vehicleId);
+                }
+            });
+            updateVehicleCount();
+            updateVehicleList();
+        }, 60000);
+    </script>
+</body>
+</html>
+
