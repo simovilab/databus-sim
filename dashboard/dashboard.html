@@ -71,22 +71,98 @@
         }
         
         .vehicle-list {
-            max-height: 200px;
+            max-height: 400px;
             overflow-y: auto;
             margin-top: 10px;
             font-size: 12px;
         }
         
         .vehicle-item {
-            padding: 5px;
-            margin: 3px 0;
+            padding: 8px;
+            margin: 5px 0;
             background: #f9f9f9;
             border-radius: 4px;
             cursor: pointer;
+            border-left: 4px solid #2196F3;
         }
         
         .vehicle-item:hover {
             background: #e3f2fd;
+        }
+        
+        .vehicle-item.delayed {
+            border-left-color: #ff9800;
+        }
+        
+        .vehicle-item.holding {
+            border-left-color: #f44336;
+        }
+        
+        .vehicle-item.detour {
+            border-left-color: #9c27b0;
+        }
+        
+        .vehicle-item.breakdown {
+            border-left-color: #d32f2f;
+            background: #ffebee;
+        }
+        
+        .vehicle-metrics {
+            margin-top: 4px;
+            font-size: 10px;
+            color: #666;
+        }
+        
+        .metric-row {
+            display: flex;
+            justify-content: space-between;
+            margin: 2px 0;
+        }
+        
+        .perturbation-badge {
+            display: inline-block;
+            padding: 2px 6px;
+            border-radius: 3px;
+            font-size: 9px;
+            font-weight: bold;
+            margin: 2px;
+            background: #ff9800;
+            color: white;
+        }
+        
+        .perturbation-badge.holding {
+            background: #f44336;
+        }
+        
+        .perturbation-badge.detour {
+            background: #9c27b0;
+        }
+        
+        .perturbation-badge.breakdown {
+            background: #d32f2f;
+        }
+        
+        .otp-indicator {
+            display: inline-block;
+            padding: 1px 4px;
+            border-radius: 2px;
+            font-weight: bold;
+            font-size: 10px;
+        }
+        
+        .otp-good {
+            background: #4CAF50;
+            color: white;
+        }
+        
+        .otp-fair {
+            background: #ff9800;
+            color: white;
+        }
+        
+        .otp-poor {
+            background: #f44336;
+            color: white;
         }
     </style>
 </head>
@@ -108,12 +184,9 @@
     <!-- Leaflet JS -->
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
     
-    <!-- MQTT.js via CDN -->
-    <script src="https://unpkg.com/mqtt@5.3.4/dist/mqtt.min.js"></script>
-    
     <script>
         // Initialize the map
-        const map = L.map('map').setView([9.9281, -84.0907], 13); // Default to Costa Rica coordinates
+        const map = L.map('map').setView([9.9356, -84.0490], 15); // UCR Campus coordinates
         
         // Add OpenStreetMap tiles
         L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
@@ -124,13 +197,27 @@
         // Store vehicle markers and data
         const vehicles = new Map();
         
-        // Custom icon for vehicles
-        const vehicleIcon = L.divIcon({
-            className: 'vehicle-marker',
-            html: '<div style="background-color: #2196F3; width: 16px; height: 16px; border-radius: 50%; border: 3px solid white; box-shadow: 0 2px 5px rgba(0,0,0,0.3);"></div>',
-            iconSize: [22, 22],
-            iconAnchor: [11, 11]
-        });
+        // Custom icon for vehicles (color based on status)
+        function getVehicleIcon(status) {
+            let color = '#2196F3'; // default blue
+            
+            if (status === 'delayed') {
+                color = '#ff9800'; // orange
+            } else if (status === 'holding') {
+                color = '#f44336'; // red
+            } else if (status === 'detour') {
+                color = '#9c27b0'; // purple
+            } else if (status === 'breakdown') {
+                color = '#d32f2f'; // dark red
+            }
+            
+            return L.divIcon({
+                className: 'vehicle-marker',
+                html: `<div style="background-color: ${color}; width: 16px; height: 16px; border-radius: 50%; border: 3px solid white; box-shadow: 0 2px 5px rgba(0,0,0,0.3);"></div>`,
+                iconSize: [22, 22],
+                iconAnchor: [11, 11]
+            });
+        }
         
         // Update status indicator
         function updateStatus(connected) {
@@ -157,12 +244,48 @@
             list.innerHTML = '';
             
             vehicles.forEach((data, vehicleId) => {
+                const metrics = data.metrics || {};
+                const perturbations = data.perturbations || [];
+                const status = data.status || 'on_time';
+                
+                // Format OTP
+                const otp = metrics.otp_percent || 100;
+                let otpClass = 'otp-good';
+                if (otp < 80) otpClass = 'otp-poor';
+                else if (otp < 95) otpClass = 'otp-fair';
+                
+                // Format delay
+                const delayMins = Math.abs(Math.round((metrics.delay_seconds || 0) / 60));
+                const delayText = metrics.delay_seconds > 0 ? `+${delayMins}m` : 
+                                  metrics.delay_seconds < 0 ? `-${delayMins}m` : 'On time';
+                
+                // Perturbation badges
+                let perturbBadges = '';
+                perturbations.forEach(p => {
+                    perturbBadges += `<span class="perturbation-badge ${p.type}">${p.type.toUpperCase()}</span>`;
+                });
+                
                 const item = document.createElement('div');
-                item.className = 'vehicle-item';
+                item.className = `vehicle-item ${status}`;
                 item.innerHTML = `
-                    <strong>${vehicleId}</strong><br>
-                    Route: ${data.route_id}<br>
-                    Trip: ${data.trip_id}
+                    <strong>${vehicleId}</strong> 
+                    <span class="otp-indicator ${otpClass}">${otp.toFixed(0)}% OTP</span>
+                    ${perturbBadges}
+                    <br>
+                    <div class="vehicle-metrics">
+                        <div class="metric-row">
+                            <span>🚌 Route: ${data.route_id}</span>
+                            <span>⚡ ${metrics.velocity_kmh || 0} km/h</span>
+                        </div>
+                        <div class="metric-row">
+                            <span>⏱️ ${delayText}</span>
+                            <span>📊 Gap: ${Math.round((metrics.gap_seconds || 0) / 60)}m</span>
+                        </div>
+                        <div class="metric-row">
+                            <span>🎯 Headway: ${(metrics.headway_adherence_percent || 100).toFixed(0)}%</span>
+                            <span>📏 ${metrics.distance_km || 0} km</span>
+                        </div>
+                    </div>
                 `;
                 item.onclick = () => {
                     map.setView([data.lat, data.lon], 16);
@@ -174,7 +297,7 @@
         
         // Update or create vehicle marker
         function updateVehicle(data) {
-            const { lat, lon, trip_id, route_id, vehicle_id } = data;
+            const { lat, lon, trip_id, route_id, vehicle_id, metrics, perturbations, status } = data;
             
             if (!lat || !lon || !vehicle_id) {
                 console.warn('Invalid data received:', data);
@@ -182,43 +305,73 @@
             }
             
             const position = [parseFloat(lat), parseFloat(lon)];
+            const vehicleIcon = getVehicleIcon(status || 'on_time');
+            
+            // Format popup content with metrics
+            const m = metrics || {};
+            const delayMins = Math.round((m.delay_seconds || 0) / 60);
+            const delayText = m.delay_seconds > 0 ? `<span style="color: #ff9800;">+${delayMins} min late</span>` : 
+                              m.delay_seconds < 0 ? `<span style="color: #4CAF50;">${Math.abs(delayMins)} min early</span>` : 
+                              '<span style="color: #4CAF50;">On time</span>';
+            
+            let perturbText = '';
+            if (perturbations && perturbations.length > 0) {
+                perturbText = '<br><strong>Active Issues:</strong><br>';
+                perturbations.forEach(p => {
+                    perturbText += `• ${p.description}<br>`;
+                });
+            }
+            
+            const popupContent = `
+                <strong>Vehicle ${vehicle_id}</strong><br>
+                Route: ${route_id} | Trip: ${trip_id}<br>
+                <hr style="margin: 5px 0;">
+                <strong>Performance:</strong><br>
+                OTP: ${(m.otp_percent || 100).toFixed(1)}% | ${delayText}<br>
+                Speed: ${m.velocity_kmh || 0} km/h<br>
+                Headway Adherence: ${(m.headway_adherence_percent || 100).toFixed(1)}%<br>
+                Gap to Next: ${Math.round((m.gap_seconds || 0) / 60)} min<br>
+                Distance: ${m.distance_km || 0} km
+                ${perturbText}
+                <hr style="margin: 5px 0;">
+                Position: ${lat.toFixed(6)}, ${lon.toFixed(6)}
+            `;
             
             if (vehicles.has(vehicle_id)) {
                 // Update existing marker
                 const vehicleData = vehicles.get(vehicle_id);
                 vehicleData.marker.setLatLng(position);
-                vehicleData.marker.setPopupContent(`
-                    <strong>Vehicle ${vehicle_id}</strong><br>
-                    Route: ${route_id}<br>
-                    Trip: ${trip_id}<br>
-                    Position: ${lat.toFixed(6)}, ${lon.toFixed(6)}
-                `);
+                vehicleData.marker.setIcon(vehicleIcon);
+                vehicleData.marker.setPopupContent(popupContent);
                 vehicleData.lat = lat;
                 vehicleData.lon = lon;
                 vehicleData.trip_id = trip_id;
                 vehicleData.route_id = route_id;
+                vehicleData.metrics = metrics;
+                vehicleData.perturbations = perturbations;
+                vehicleData.status = status;
+                vehicleData.lastUpdate = Date.now();
             } else {
                 // Create new marker
                 const marker = L.marker(position, { icon: vehicleIcon })
                     .addTo(map)
-                    .bindPopup(`
-                        <strong>Vehicle ${vehicle_id}</strong><br>
-                        Route: ${route_id}<br>
-                        Trip: ${trip_id}<br>
-                        Position: ${lat.toFixed(6)}, ${lon.toFixed(6)}
-                    `);
+                    .bindPopup(popupContent);
                 
                 vehicles.set(vehicle_id, {
                     marker,
                     lat,
                     lon,
                     trip_id,
-                    route_id
+                    route_id,
+                    metrics,
+                    perturbations,
+                    status,
+                    lastUpdate: Date.now()
                 });
                 
                 // Auto-center map on first vehicle
                 if (vehicles.size === 1) {
-                    map.setView(position, 14);
+                    map.setView(position, 15);
                 }
             }
             
@@ -226,54 +379,57 @@
             updateVehicleList();
         }
         
-        // Connect to MQTT broker via WebSocket
-        const brokerUrl = 'ws://mqtt.simovi.org:1883';
-        const topic = 'vehicle/location/#'; // Subscribe to all vehicle location updates
+        // Connect to local WebSocket server (GTFS data)
+        const wsUrl = 'ws://localhost:8765';
+        let ws = null;
         
-        console.log('Connecting to MQTT broker:', brokerUrl);
-        
-        const client = mqtt.connect(brokerUrl, {
-            reconnectPeriod: 5000,
-            connectTimeout: 30000
-        });
-        
-        client.on('connect', () => {
-            console.log('Connected to MQTT broker');
-            updateStatus(true);
+        function connectWebSocket() {
+            console.log('Connecting to WebSocket server:', wsUrl);
             
-            // Subscribe to vehicle location topic
-            client.subscribe(topic, (err) => {
-                if (err) {
-                    console.error('Subscription error:', err);
-                } else {
-                    console.log('Subscribed to topic:', topic);
+            ws = new WebSocket(wsUrl);
+            
+            ws.onopen = () => {
+                console.log('Connected to WebSocket server');
+                updateStatus(true);
+            };
+            
+            ws.onmessage = (event) => {
+                try {
+                    const message = JSON.parse(event.data);
+                    console.log('Received message:', message);
+                    
+                    if (message.type === 'vehicle_positions') {
+                        // Update all vehicles
+                        message.vehicles.forEach(vehicleData => {
+                            updateVehicle(vehicleData);
+                        });
+                    } else if (message.type === 'info') {
+                        console.log('Server info:', message);
+                    }
+                } catch (error) {
+                    console.error('Error parsing message:', error);
                 }
-            });
-        });
+            };
+            
+            ws.onerror = (error) => {
+                console.error('WebSocket error:', error);
+                updateStatus(false);
+            };
+            
+            ws.onclose = () => {
+                console.log('WebSocket connection closed');
+                updateStatus(false);
+                
+                // Attempt to reconnect after 5 seconds
+                setTimeout(() => {
+                    console.log('Attempting to reconnect...');
+                    connectWebSocket();
+                }, 5000);
+            };
+        }
         
-        client.on('message', (topic, message) => {
-            try {
-                const data = JSON.parse(message.toString());
-                console.log('Received message:', topic, data);
-                updateVehicle(data);
-            } catch (error) {
-                console.error('Error parsing message:', error, message.toString());
-            }
-        });
-        
-        client.on('error', (error) => {
-            console.error('MQTT error:', error);
-            updateStatus(false);
-        });
-        
-        client.on('close', () => {
-            console.log('MQTT connection closed');
-            updateStatus(false);
-        });
-        
-        client.on('reconnect', () => {
-            console.log('Reconnecting to MQTT broker...');
-        });
+        // Initialize WebSocket connection
+        connectWebSocket();
         
         // Clean up old vehicles (optional - removes vehicles not seen in 5 minutes)
         setInterval(() => {
