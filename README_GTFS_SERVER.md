@@ -60,9 +60,9 @@ Each vehicle tracks comprehensive performance metrics:
 
 ## Installation
 
-1. Install the required Python package:
+1. Install the required Python packages:
 ```bash
-pip install websockets
+pip install websockets paho-mqtt
 ```
 
 Or using the requirements file:
@@ -105,6 +105,25 @@ The server will:
 - **GTFSData**: Loads and stores GTFS data from the zip file
 - **VehicleSimulator**: Creates and updates simulated vehicle positions along route shapes
 - **WebSocket Server**: Handles client connections and broadcasts vehicle positions
+- **MQTT Publisher**: Publishes each vehicle's data to MQTT broker topics
+
+### Data Flow
+
+1. **GTFS Data Loading**: Reads routes, stops, trips, and shapes from `GTFS_bUCR.zip`
+2. **Vehicle Simulation**: Creates vehicles with realistic perturbations and metrics
+3. **Dual Broadcasting**:
+   - **WebSocket**: Sends all vehicle positions to dashboard clients
+   - **MQTT**: Publishes individual vehicle data to broker topics
+4. **Real-time Updates**: Every 2 seconds, positions are updated and broadcast
+
+### MQTT Integration
+
+- **Broker**: mqtt.simovi.org:1883
+- **Authentication**: Username/Password (admin/admin)
+- **Topic Structure**: `vehicle/{vehicle_id}` (e.g., `vehicle/VEH_001`)
+- **QoS**: 1 (at least once delivery)
+- **Retain**: False (no message retention)
+- **Message Format**: JSON with full vehicle data including metrics and perturbations
 
 ### Dashboard (`dashboard/dashboard.html`)
 
@@ -115,9 +134,15 @@ The server will:
 
 ## Message Format
 
-The server sends messages in JSON format:
+The server sends messages in JSON format via both WebSocket and MQTT.
 
-### Info Message (on connection)
+### MQTT Topics
+
+Each vehicle publishes to its own topic:
+- Topic pattern: `vehicle/{vehicle_id}`
+- Examples: `vehicle/VEH_001`, `vehicle/VEH_002`, etc.
+
+### Info Message (WebSocket only, on connection)
 ```json
 {
   "type": "info",
@@ -129,39 +154,44 @@ The server sends messages in JSON format:
 ```
 
 ### Vehicle Positions (periodic updates)
+
+**WebSocket**: All vehicles sent together
 ```json
 {
   "type": "vehicle_positions",
   "timestamp": "2025-11-08T10:30:45.123456",
-  "vehicles": [
+  "vehicles": [...]
+}
+```
+
+**MQTT**: Each vehicle published to separate topic `vehicle/{vehicle_id}`
+```json
+{
+  "vehicle_id": "VEH_001",
+  "trip_id": "bUCR_L1_001",
+  "route_id": "bUCR_L1",
+  "lat": 9.9356,
+  "lon": -84.0490,
+  "timestamp": "2025-11-08T10:30:45.123456",
+  "metrics": {
+    "velocity_kmh": 23.5,
+    "otp_percent": 98.5,
+    "delay_seconds": -45,
+    "headway_adherence_percent": 95.2,
+    "gap_seconds": 580,
+    "distance_km": 3.45,
+    "stops_completed": 5
+  },
+  "perturbations": [
     {
-      "vehicle_id": "VEH_001",
-      "trip_id": "bUCR_L1_001",
-      "route_id": "bUCR_L1",
-      "lat": 9.9356,
-      "lon": -84.0490,
-      "timestamp": "2025-11-08T10:30:45.123456",
-      "metrics": {
-        "velocity_kmh": 23.5,
-        "otp_percent": 98.5,
-        "delay_seconds": -45,
-        "headway_adherence_percent": 95.2,
-        "gap_seconds": 580,
-        "distance_km": 3.45,
-        "stops_completed": 5
-      },
-      "perturbations": [
-        {
-          "type": "delay",
-          "description": "Traffic delay: 3 minutes",
-          "severity": 0.6,
-          "remaining_duration": 120,
-          "duration": 180
-        }
-      ],
-      "status": "delayed"
+      "type": "delay",
+      "description": "Traffic delay: 3 minutes",
+      "severity": 0.6,
+      "remaining_duration": 120,
+      "duration": 180
     }
-  ]
+  ],
+  "status": "delayed"
 }
 ```
 
@@ -180,6 +210,14 @@ You can modify these parameters in `gtfs_websocket_server.py`:
 - **WebSocket host/port**: Change `host` and `port` in `main()` function (default: `localhost:8765`)
 - **Update interval**: Change `UPDATE_INTERVAL` constant (default: 2 seconds)
 - **Number of vehicles**: Modify `sample_trips = gtfs_data.trips[:8]` in `initialize_vehicles()` (default: 8 vehicles)
+
+### MQTT Settings
+- **Broker**: Change `MQTT_BROKER` constant (default: `mqtt.simovi.org`)
+- **Port**: Change `MQTT_PORT` constant (default: 1883)
+- **Username**: Change `MQTT_USERNAME` constant (default: `admin`)
+- **Password**: Change `MQTT_PASSWORD` constant (default: `admin`)
+- **Topic prefix**: Change `MQTT_TOPIC_PREFIX` constant (default: `vehicle/`)
+- **QoS**: Modify `qos` parameter in `publish()` call (default: 1)
 
 ### Simulation Parameters
 - **Base speed**: Change `BASE_SPEED_KMH` constant (default: 25 km/h)
@@ -222,6 +260,17 @@ Adjust in `apply_random_perturbation()` method:
 - Make sure the server is running: `python gtfs_websocket_server.py`
 - Check the browser console for connection errors (F12)
 - Verify the WebSocket URL in dashboard.html matches the server address
+
+**MQTT not connecting**
+- Verify MQTT broker is accessible: `mqtt.simovi.org:1883`
+- Check username/password credentials (admin/admin)
+- Server will continue with WebSocket only if MQTT fails
+- Look for "✓ Connected to MQTT broker" message in console
+
+**MQTT messages not received**
+- Subscribe to topics: `vehicle/#` (all vehicles) or `vehicle/VEH_001` (specific)
+- Use MQTT client like MQTT Explorer or mosquitto_sub to verify
+- Check QoS settings match between publisher and subscriber
 
 **No vehicles showing**
 - Check server console output for errors loading GTFS data

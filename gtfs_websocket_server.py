@@ -14,6 +14,7 @@ import random
 from typing import Dict, List, Optional
 from enum import Enum
 import websockets
+import paho.mqtt.client as mqtt
 
 # Path to GTFS data
 GTFS_ZIP_PATH = Path(__file__).parent / "assets" / "GTFS_bUCR.zip"
@@ -22,6 +23,13 @@ GTFS_ZIP_PATH = Path(__file__).parent / "assets" / "GTFS_bUCR.zip"
 BASE_SPEED_KMH = 25  # Base speed in km/h
 UPDATE_INTERVAL = 2  # seconds between updates
 SCHEDULED_HEADWAY = 600  # 10 minutes in seconds
+
+# MQTT Configuration
+MQTT_BROKER = "mqtt.simovi.org"
+MQTT_PORT = 1883
+MQTT_USERNAME = "admin"
+MQTT_PASSWORD = "admin"
+MQTT_TOPIC_PREFIX = "vehicle/"  # Topic format: vehicle/{vehicle_id}
 
 class PerturbationType(Enum):
     """Types of perturbations that can affect vehicles"""
@@ -454,6 +462,7 @@ class VehicleSimulator:
 connected_clients = set()
 gtfs_data = None
 vehicle_simulator = None
+mqtt_client = None
 
 
 async def handle_client(websocket):
@@ -494,30 +503,45 @@ async def handle_client(websocket):
 
 
 async def broadcast_vehicle_positions():
-    """Periodically broadcast vehicle positions to all connected clients"""
+    """Periodically broadcast vehicle positions to all connected clients and MQTT"""
     while True:
-        if connected_clients and vehicle_simulator:
+        if vehicle_simulator:
             # Get updated positions with metrics
             positions = vehicle_simulator.get_all_positions()
             
-            # Broadcast to all clients
             if positions:
-                message = json.dumps({
+                # Prepare WebSocket message
+                ws_message = json.dumps({
                     'type': 'vehicle_positions',
                     'vehicles': positions,
                     'timestamp': datetime.now().isoformat()
                 })
                 
-                # Send to all connected clients
-                disconnected = set()
-                for client in connected_clients:
-                    try:
-                        await client.send(message)
-                    except websockets.exceptions.ConnectionClosed:
-                        disconnected.add(client)
+                # Send to WebSocket clients
+                if connected_clients:
+                    disconnected = set()
+                    for client in connected_clients:
+                        try:
+                            await client.send(ws_message)
+                        except websockets.exceptions.ConnectionClosed:
+                            disconnected.add(client)
+                    
+                    # Remove disconnected clients
+                    connected_clients.difference_update(disconnected)
                 
-                # Remove disconnected clients
-                connected_clients.difference_update(disconnected)
+                # Publish each vehicle to MQTT
+                if mqtt_client and mqtt_client.is_connected():
+                    for vehicle_data in positions:
+                        vehicle_id = vehicle_data['vehicle_id']
+                        topic = f"{MQTT_TOPIC_PREFIX}{vehicle_id}"
+                        
+                        # Publish vehicle data to MQTT
+                        mqtt_client.publish(
+                            topic,
+                            json.dumps(vehicle_data),
+                            qos=1,
+                            retain=False
+                        )
         
         # Update every UPDATE_INTERVAL seconds
         await asyncio.sleep(UPDATE_INTERVAL)
@@ -538,6 +562,46 @@ async def initialize_vehicles():
             print(f"Created vehicle {vehicle['vehicle_id']} on route {vehicle['route_id']} (starts in {delay_start}s)")
 
 
+def on_mqtt_connect(client, userdata, flags, rc):
+    """Callback when MQTT client connects"""
+    if rc == 0:
+        print("✓ Connected to MQTT broker")
+    else:
+        print(f"✗ Failed to connect to MQTT broker. Return code: {rc}")
+
+def on_mqtt_disconnect(client, userdata, rc):
+    """Callback when MQTT client disconnects"""
+    if rc != 0:
+        print(f"✗ Unexpected MQTT disconnection. Return code: {rc}")
+    else:
+        print("MQTT client disconnected")
+
+def on_mqtt_publish(client, userdata, mid):
+    """Callback when message is published to MQTT"""
+    pass  # Silent success
+
+def setup_mqtt_client():
+    """Initialize and connect MQTT client"""
+    global mqtt_client
+    
+    print(f"Connecting to MQTT broker at {MQTT_BROKER}:{MQTT_PORT}...")
+    
+    mqtt_client = mqtt.Client(client_id="gtfs_simulator", clean_session=True)
+    mqtt_client.username_pw_set(MQTT_USERNAME, MQTT_PASSWORD)
+    
+    # Set callbacks
+    mqtt_client.on_connect = on_mqtt_connect
+    mqtt_client.on_disconnect = on_mqtt_disconnect
+    mqtt_client.on_publish = on_mqtt_publish
+    
+    try:
+        mqtt_client.connect(MQTT_BROKER, MQTT_PORT, keepalive=60)
+        mqtt_client.loop_start()  # Start network loop in background thread
+        return True
+    except Exception as e:
+        print(f"✗ Failed to connect to MQTT broker: {e}")
+        return False
+
 async def main():
     """Main server function"""
     global gtfs_data, vehicle_simulator
@@ -549,6 +613,14 @@ async def main():
     # Initialize vehicle simulator
     print("Initializing vehicle simulator...")
     vehicle_simulator = VehicleSimulator(gtfs_data)
+    
+    # Setup MQTT connection
+    print("\nSetting up MQTT connection...")
+    mqtt_connected = setup_mqtt_client()
+    if mqtt_connected:
+        print(f"MQTT publishing to topics: {MQTT_TOPIC_PREFIX}{{vehicle_id}}")
+    else:
+        print("Warning: MQTT not connected. Continuing with WebSocket only.")
     
     # Start WebSocket server
     host = "localhost"
@@ -571,3 +643,7 @@ if __name__ == "__main__":
         asyncio.run(main())
     except KeyboardInterrupt:
         print("\nServer stopped by user")
+        if mqtt_client:
+            mqtt_client.loop_stop()
+            mqtt_client.disconnect()
+            print("MQTT client disconnected")
