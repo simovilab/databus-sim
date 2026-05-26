@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   redis:
     image: redis:7-alpine
@@ -12,49 +10,6 @@ services:
       interval: 10s
       timeout: 3s
       retries: 5
-
-  app:
-    build: .
-    volumes:
-      - .:/app
-      - ./assets:/app/assets
-    environment:
-      - CELERY_BROKER_URL=redis://redis:6379/0
-      - CELERY_RESULT_BACKEND=redis://redis:6379/0
-    depends_on:
-      redis:
-        condition: service_healthy
-    ports:
-      - "8000:8000"
-    command: uv run python main.py
-
-  celery_worker:
-    build: .
-    volumes:
-      - .:/app
-      - ./assets:/app/assets
-    environment:
-      - CELERY_BROKER_URL=redis://redis:6379/0
-      - CELERY_RESULT_BACKEND=redis://redis:6379/0
-    depends_on:
-      redis:
-        condition: service_healthy
-    command: uv run celery -A tasks worker --loglevel=info
-    restart: unless-stopped
-
-  celery_beat:
-    build: .
-    volumes:
-      - .:/app
-      - ./assets:/app/assets
-    environment:
-      - CELERY_BROKER_URL=redis://redis:6379/0
-      - CELERY_RESULT_BACKEND=redis://redis:6379/0
-    depends_on:
-      redis:
-        condition: service_healthy
-    command: uv run celery -A tasks beat --loglevel=info
-    restart: unless-stopped
 
   # WS-to-TCP bridge: exposes MQTT-over-WebSockets on :8083 for the browser UI,
   # bridges every topic both ways to the databus telemetry-broker on host :1883.
@@ -79,7 +34,7 @@ services:
       MQTT_HOST: ${MQTT_HOST:-host.docker.internal}
       MQTT_PORT: "1883"
       SIM_HTTP_PORT: "8081"
-      DATABUS_BASE_URL: ${DATABUS_BASE_URL:-http://app:8000}
+      DATABUS_BASE_URL: ${DATABUS_BASE_URL:-http://host.docker.internal:8000}
       REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
       SCHEDULE_PATH: /app/schedule.yaml
     ports:
@@ -89,8 +44,6 @@ services:
     depends_on:
       redis:
         condition: service_healthy
-      app:
-        condition: service_started
     command:
       - uv
       - run
