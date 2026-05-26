@@ -1,0 +1,27 @@
+id: register-run--submission-failure                                                                                                                                                                                                                                                                 
+fsm: register-run                                                                                                                                                                                                                                                                                  
+description: Backend rejects the run payload due to missing required fields                                                                                                                                                                                                                          
+tags: [register-run, failure-path]                                                                                                                                                                                                                                                                   
+timeout_ms: 10000
+
+expected_branch:                                                                                                                                                                                                                                                                                     
+  terminal_state: notifying                                                                                                                                                                                                                                                                        
+  via_states: [submitting]                                                                                                                                                                                                                                                                           
+  via_events: [backend.RUN_SUBMISSION_FAILED]
+
+# TODO: add inputs that drive the FSM into this failure branch
+inputs:
+  - driver: http
+    method: POST
+    url: "{backend}/api/runs"
+    json:
+      run_status: "SUBMITTED"
+    expect_status: [400]
+
+expect:
+  observations:
+    - action: backend.RUN_SUBMISSION_FAILED
+      within_ms: 5000
+
+timeout_ms: 10000
+tags: [register-run, failure-path]

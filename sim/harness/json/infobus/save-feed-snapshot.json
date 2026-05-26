@@ -1,0 +1,103 @@
+{
+  "context": {
+    "snapshot_timestamp": null,
+    "entity_count": 0,
+    "storage_format": null,
+    "blob_size_bytes": 0,
+    "error": null
+  },
+  "id": "save-feed-snapshot",
+  "initial": "waiting",
+  "states": {
+    "waiting": {
+      "on": {
+        "scheduler.SNAPSHOT_SAVE_TRIGGERED": [
+          {
+            "target": "serializing",
+            "actions": [
+              {
+                "type": "engine.read_feed_snapshot"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    "serializing": {
+      "entry": [
+        {
+          "type": "engine.convert_to_parquet"
+        },
+        {
+          "type": "engine.enrich_metadata"
+        },
+        {
+          "type": "engine.calculate_blob_size"
+        }
+      ],
+      "on": {
+        "engine.SNAPSHOT_SERIALIZATION_SUCCEEDED": [
+          {
+            "target": "persisting",
+            "actions": []
+          }
+        ],
+        "engine.SNAPSHOT_SERIALIZATION_FAILED": [
+          {
+            "target": "notifying",
+            "actions": []
+          }
+        ]
+      }
+    },
+    "persisting": {
+      "entry": [
+        {
+          "type": "engine.persist_parquet_file"
+        }
+      ],
+      "on": {
+        "engine.SNAPSHOT_PERSIST_SUCCEEDED": [
+          {
+            "target": "waiting",
+            "actions": [
+              {
+                "type": "engine.emit_persistence_assertion"
+              },
+              {
+                "type": "engine.clear_feed_data"
+              }
+            ]
+          }
+        ],
+        "engine.SNAPSHOT_PERSIST_FAILED": [
+          {
+            "target": "notifying",
+            "actions": []
+          }
+        ]
+      }
+    },
+    "notifying": {
+      "entry": [
+        {
+          "type": "engine.send_notifications"
+        },
+        {
+          "type": "engine.flush_data"
+        },
+        {
+          "type": "engine.log_errors"
+        }
+      ],
+      "on": {
+        "engine.SNAPSHOT_NOTIFICATION_SENT": [
+          {
+            "target": "waiting",
+            "actions": []
+          }
+        ]
+      }
+    }
+  }
+}

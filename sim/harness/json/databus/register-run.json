@@ -1,0 +1,128 @@
+{
+  "context": {
+    "error": null,
+    "result": null,
+    "run_id": null,
+    "trip_id": null,
+    "vehicle_id": null,
+    "rejection_reason": null
+  },
+  "id": "register-run",
+  "initial": "waiting",
+  "states": {
+    "waiting": {
+      "on": {
+        "backend.RUN_SUBMISSION_REQUESTED": [
+          {
+            "target": "submitting",
+            "actions": []
+          }
+        ]
+      }
+    },
+    "submitting": {
+      "entry": [
+        {
+          "type": "backend.validate_run_request_data"
+        }
+      ],
+      "on": {
+        "backend.RUN_SUBMISSION_SUCCEEDED": [
+          {
+            "target": "registering",
+            "actions": [
+              {
+                "type": "realtime_engine.register_run"
+              }
+            ]
+          }
+        ],
+        "backend.RUN_SUBMISSION_FAILED": [
+          {
+            "target": "notifying",
+            "actions": []
+          }
+        ]
+      }
+    },
+    "registering": {
+      "initial": "validating",
+      "states": {
+        "validating": {
+          "entry": [
+            {
+              "type": "realtime_engine.validate_run"
+            }
+          ],
+          "on": {
+            "realtime_engine.RUN_VALIDATION_SUCCEEDED": [
+              {
+                "target": "initializing",
+                "actions": []
+              }
+            ]
+          }
+        },
+        "initializing": {
+          "entry": [
+            {
+              "type": "realtime_engine.initialize_run"
+            }
+          ]
+        }
+      },
+      "on": {
+        "realtime_engine.RUN_VALIDATION_FAILED": [
+          {
+            "target": "notifying",
+            "actions": []
+          }
+        ],
+        "realtime_engine.RUN_INITIALIZATION_SUCCEEDED": [
+          {
+            "target": "confirming",
+            "actions": []
+          }
+        ],
+        "realtime_engine.RUN_INITIALIZATION_FAILED": [
+          {
+            "target": "notifying",
+            "actions": []
+          }
+        ]
+      }
+    },
+    "notifying": {
+      "entry": [],
+      "on": {
+        "backend.RUN_NOTIFICATION_SENT": [
+          {
+            "target": "waiting",
+            "actions": []
+          }
+        ]
+      }
+    },
+    "confirming": {
+      "entry": [
+        {
+          "type": "realtime_engine.start_run"
+        }
+      ],
+      "on": {
+        "backend.RUN_START_SUCCEEDED": [
+          {
+            "target": "waiting",
+            "actions": []
+          }
+        ],
+        "backend.RUN_CONFIRMATION_FAILED": [
+          {
+            "target": "notifying",
+            "actions": []
+          }
+        ]
+      }
+    }
+  }
+}

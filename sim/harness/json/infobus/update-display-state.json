@@ -1,0 +1,124 @@
+{
+  "context": {
+    "snapshot_timestamp": null,
+    "screens_evaluated": 0,
+    "screens_changed": 0,
+    "changes": [],
+    "observation_required": false,
+    "error": null
+  },
+  "id": "update-display-state",
+  "initial": "waiting",
+  "states": {
+    "waiting": {
+      "on": {
+        "engine.DISPLAY_UPDATE_REQUESTED": [
+          {
+            "target": "fetching",
+            "actions": []
+          }
+        ]
+      }
+    },
+    "fetching": {
+      "entry": [
+        {
+          "type": "engine.load_enriched_snapshot"
+        },
+        {
+          "type": "engine.load_active_screens"
+        }
+      ],
+      "on": {
+        "engine.DISPLAY_FETCH_SUCCEEDED": [
+          {
+            "target": "evaluating",
+            "actions": []
+          }
+        ],
+        "engine.DISPLAY_FETCH_FAILED": [
+          {
+            "target": "notifying",
+            "actions": []
+          }
+        ]
+      }
+    },
+    "evaluating": {
+      "entry": [
+        {
+          "type": "engine.apply_spatial_filter"
+        },
+        {
+          "type": "engine.apply_route_subscriptions"
+        },
+        {
+          "type": "engine.compute_display_payloads"
+        },
+        {
+          "type": "engine.detect_material_changes"
+        },
+        {
+          "type": "engine.record_changes"
+        }
+      ],
+      "on": {
+        "engine.DISPLAY_STATE_EVALUATED": [
+          {
+            "target": "updating",
+            "actions": []
+          }
+        ]
+      }
+    },
+    "updating": {
+      "entry": [
+        {
+          "type": "engine.write_screen_display_state"
+        },
+        {
+          "type": "engine.update_last_refresh_timestamp"
+        }
+      ],
+      "on": {
+        "engine.DISPLAY_UPDATE_SUCCEEDED": [
+          {
+            "target": "waiting",
+            "actions": [
+              {
+                "type": "engine.publish_display_change_observation"
+              },
+              {
+                "type": "engine.request_broadcast"
+              }
+            ]
+          }
+        ],
+        "engine.DISPLAY_UPDATE_FAILED": [
+          {
+            "target": "notifying",
+            "actions": []
+          }
+        ]
+      }
+    },
+    "notifying": {
+      "entry": [
+        {
+          "type": "engine.send_notifications"
+        },
+        {
+          "type": "engine.log_errors"
+        }
+      ],
+      "on": {
+        "engine.DISPLAY_NOTIFICATION_SENT": [
+          {
+            "target": "waiting",
+            "actions": []
+          }
+        ]
+      }
+    }
+  }
+}

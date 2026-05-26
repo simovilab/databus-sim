@@ -1,0 +1,170 @@
+{
+  "context": {
+    "transit_system_id": null,
+    "gtfs_provider_id": null,
+    "feed_url": null,
+    "current_feed_version": null,
+    "remote_feed_version": null,
+    "changes_detected": false,
+    "error": null
+  },
+  "id": "poll-gtfs-schedule",
+  "initial": "waiting",
+  "states": {
+    "waiting": {
+      "on": {
+        "scheduler.SCHEDULE_POLL_TRIGGERED": [
+          {
+            "target": "checking",
+            "actions": []
+          }
+        ]
+      }
+    },
+    "checking": {
+      "entry": [
+        {
+          "type": "engine.read_current_feed_version"
+        },
+        {
+          "type": "engine.fetch_remote_feed_info"
+        },
+        {
+          "type": "engine.compare_feed_versions"
+        }
+      ],
+      "on": {
+        "engine.SCHEDULE_CHANGE_DETECTED": [
+          {
+            "target": "downloading",
+            "actions": []
+          }
+        ],
+        "engine.SCHEDULE_UNCHANGED": [
+          {
+            "target": "waiting",
+            "actions": []
+          }
+        ],
+        "engine.SCHEDULE_CHECK_FAILED": [
+          {
+            "target": "notifying",
+            "actions": []
+          }
+        ]
+      }
+    },
+    "downloading": {
+      "entry": [
+        {
+          "type": "engine.download_feed_zip"
+        }
+      ],
+      "on": {
+        "engine.SCHEDULE_DOWNLOAD_SUCCEEDED": [
+          {
+            "target": "validating",
+            "actions": []
+          }
+        ],
+        "engine.SCHEDULE_DOWNLOAD_FAILED": [
+          {
+            "target": "notifying",
+            "actions": []
+          }
+        ]
+      }
+    },
+    "validating": {
+      "entry": [
+        {
+          "type": "engine.validate_feed_structure"
+        },
+        {
+          "type": "engine.validate_referential_integrity"
+        }
+      ],
+      "on": {
+        "engine.SCHEDULE_VALIDATION_SUCCEEDED": [
+          {
+            "target": "staging",
+            "actions": []
+          }
+        ],
+        "engine.SCHEDULE_VALIDATION_FAILED": [
+          {
+            "target": "notifying",
+            "actions": []
+          }
+        ]
+      }
+    },
+    "staging": {
+      "entry": [
+        {
+          "type": "engine.load_to_staging_tables"
+        }
+      ],
+      "on": {
+        "engine.SCHEDULE_STAGING_SUCCEEDED": [
+          {
+            "target": "promoting",
+            "actions": []
+          }
+        ],
+        "engine.SCHEDULE_STAGING_FAILED": [
+          {
+            "target": "notifying",
+            "actions": []
+          }
+        ]
+      }
+    },
+    "promoting": {
+      "entry": [
+        {
+          "type": "engine.swap_staging_to_live"
+        }
+      ],
+      "on": {
+        "engine.SCHEDULE_PROMOTION_SUCCEEDED": [
+          {
+            "target": "waiting",
+            "actions": [
+              {
+                "type": "engine.emit_schedule_promotion_assertion"
+              }
+            ]
+          }
+        ],
+        "engine.SCHEDULE_PROMOTION_FAILED": [
+          {
+            "target": "notifying",
+            "actions": []
+          }
+        ]
+      }
+    },
+    "notifying": {
+      "entry": [
+        {
+          "type": "engine.send_notifications"
+        },
+        {
+          "type": "engine.rollback_staging"
+        },
+        {
+          "type": "engine.log_errors"
+        }
+      ],
+      "on": {
+        "engine.SCHEDULE_NOTIFICATION_SENT": [
+          {
+            "target": "waiting",
+            "actions": []
+          }
+        ]
+      }
+    }
+  }
+}

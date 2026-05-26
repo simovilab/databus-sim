@@ -1,0 +1,27 @@
+id: ingest-telemetry-no-active-run
+fsm: ingest_telemetry
+description: Telemetry arrives for a vehicle with no active run — checkActiveRun fails validation.
+
+expected_branch:
+  terminal_state: waiting
+  via_states: [validating, notifying]
+  via_events:
+    - realtime_engine.TELEMETRY_VALIDATION_FAILED
+    - realtime_engine.TELEMETRY_NOTIFICATION_SENT
+
+inputs:
+  - driver: mqtt
+    topic: "transit/vehicle/NO_RUN_VEHICLE/data"
+    payload:
+      vehicle_id: "NO_RUN_VEHICLE"
+      lat: 9.9351
+      lon: -84.0520
+      timestamp: "{now_epoch}"
+
+expect:
+  observations:
+    - action: logErrors
+      within_ms: 5000
+
+timeout_ms: 8000
+tags: [ingest-telemetry, failure-path, validation]

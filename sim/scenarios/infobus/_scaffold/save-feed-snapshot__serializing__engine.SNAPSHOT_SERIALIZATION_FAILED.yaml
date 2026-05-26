@@ -1,0 +1,15 @@
+id: save-feed-snapshot--serializing--engine.SNAPSHOT_SERIALIZATION_FAILED--stub
+fsm: save-feed-snapshot
+description: 'TODO: fill in description'
+stub: true
+
+expected_branch:
+  terminal_state: notifying
+  via_states: [serializing]
+  via_events: [engine.SNAPSHOT_SERIALIZATION_FAILED]
+
+# TODO: add inputs that drive the FSM into this failure branch
+inputs: []
+
+timeout_ms: 10000
+tags: [save-feed-snapshot, failure-path]

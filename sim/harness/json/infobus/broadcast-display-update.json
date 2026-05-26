@@ -1,0 +1,121 @@
+{
+  "context": {
+    "screen_ids": [],
+    "channel_groups": [],
+    "payload_size_bytes": 0,
+    "delivered_count": 0,
+    "unreachable_count": 0,
+    "error": null
+  },
+  "id": "broadcast-display-update",
+  "initial": "waiting",
+  "states": {
+    "waiting": {
+      "on": {
+        "broker.BROADCAST_TRIGGERED": [
+          {
+            "target": "snapshotting",
+            "actions": []
+          }
+        ]
+      }
+    },
+    "snapshotting": {
+      "entry": [
+        {
+          "type": "orchestrator.read_display_payloads"
+        },
+        {
+          "type": "orchestrator.resolve_target_channel_groups"
+        }
+      ],
+      "on": {
+        "orchestrator.BROADCAST_SNAPSHOT_SUCCEEDED": [
+          {
+            "target": "dispatching",
+            "actions": []
+          }
+        ],
+        "orchestrator.BROADCAST_SNAPSHOT_FAILED": [
+          {
+            "target": "notifying",
+            "actions": []
+          }
+        ]
+      }
+    },
+    "dispatching": {
+      "entry": [
+        {
+          "type": "orchestrator.serialize_payloads"
+        },
+        {
+          "type": "orchestrator.send_to_channel_groups"
+        }
+      ],
+      "on": {
+        "orchestrator.BROADCAST_DISPATCH_SUCCEEDED": [
+          {
+            "target": "confirming",
+            "actions": []
+          }
+        ],
+        "orchestrator.BROADCAST_DISPATCH_FAILED": [
+          {
+            "target": "notifying",
+            "actions": []
+          }
+        ]
+      }
+    },
+    "confirming": {
+      "entry": [
+        {
+          "type": "orchestrator.track_delivery"
+        },
+        {
+          "type": "orchestrator.mark_unreachable_screens"
+        }
+      ],
+      "on": {
+        "orchestrator.BROADCAST_CONFIRM_SUCCEEDED": [
+          {
+            "target": "waiting",
+            "actions": [
+              {
+                "type": "orchestrator.emit_broadcast_assertion"
+              }
+            ]
+          }
+        ],
+        "orchestrator.BROADCAST_CONFIRM_FAILED": [
+          {
+            "target": "notifying",
+            "actions": []
+          }
+        ]
+      }
+    },
+    "notifying": {
+      "entry": [
+        {
+          "type": "orchestrator.send_notifications"
+        },
+        {
+          "type": "orchestrator.log_errors"
+        },
+        {
+          "type": "orchestrator.flush_data"
+        }
+      ],
+      "on": {
+        "orchestrator.BROADCAST_NOTIFICATION_SENT": [
+          {
+            "target": "waiting",
+            "actions": []
+          }
+        ]
+      }
+    }
+  }
+}

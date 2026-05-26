@@ -1,0 +1,134 @@
+{
+  "context": {
+    "transit_system_id": null,
+    "gtfs_provider_id": null,
+    "feed_url": null,
+    "snapshot_timestamp": null,
+    "entities_count": 0,
+    "provider_degraded": false,
+    "error": null
+  },
+  "id": "poll-gtfs-feed",
+  "initial": "waiting",
+  "states": {
+    "waiting": {
+      "on": {
+        "scheduler.FEED_POLL_TRIGGERED": [
+          {
+            "target": "fetching",
+            "actions": []
+          }
+        ]
+      }
+    },
+    "fetching": {
+      "entry": [
+        {
+          "type": "engine.resolve_provider_url"
+        },
+        {
+          "type": "engine.fetch_feed_url"
+        }
+      ],
+      "on": {
+        "engine.FEED_FETCH_SUCCEEDED": [
+          {
+            "target": "parsing",
+            "actions": []
+          }
+        ],
+        "engine.FEED_FETCH_FAILED": [
+          {
+            "target": "notifying",
+            "actions": []
+          }
+        ]
+      }
+    },
+    "parsing": {
+      "entry": [
+        {
+          "type": "engine.parse_protobuf_to_dataclass"
+        },
+        {
+          "type": "engine.validate_feed_entities"
+        },
+        {
+          "type": "engine.count_entities"
+        }
+      ],
+      "on": {
+        "engine.FEED_PARSE_SUCCEEDED": [
+          {
+            "target": "caching",
+            "actions": []
+          }
+        ],
+        "engine.FEED_PARSE_FAILED": [
+          {
+            "target": "notifying",
+            "actions": []
+          }
+        ]
+      }
+    },
+    "caching": {
+      "entry": [
+        {
+          "type": "engine.write_feed_snapshot_to_memory"
+        },
+        {
+          "type": "engine.write_raw_blob_to_memory"
+        },
+        {
+          "type": "engine.clear_provider_degraded_flag"
+        }
+      ],
+      "on": {
+        "engine.FEED_CACHE_SUCCEEDED": [
+          {
+            "target": "waiting",
+            "actions": [
+              {
+                "type": "engine.emit_poll_observation"
+              },
+              {
+                "type": "engine.request_display_state_update"
+              }
+            ]
+          }
+        ],
+        "engine.FEED_CACHE_FAILED": [
+          {
+            "target": "notifying",
+            "actions": []
+          }
+        ]
+      }
+    },
+    "notifying": {
+      "entry": [
+        {
+          "type": "engine.serve_stale_snapshot"
+        },
+        {
+          "type": "engine.flag_provider_degraded"
+        },
+        {
+          "type": "engine.send_notifications"
+        },
+        {
+          "type": "engine.log_errors"
+        }
+      ],
+      "on": {
+        "engine.FEED_POLL_NOTIFICATION_SENT": [
+          {
+            "target": "waiting",
+            "actions": []
+          }
+        ]
+      }
+    }
+  }
+}

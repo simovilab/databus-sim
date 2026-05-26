@@ -1,0 +1,30 @@
+id: ingest-telemetry-happy
+fsm: ingest_telemetry
+description: Receive MQTT frame, validate, process, request state update.
+
+expected_branch:
+  terminal_state: waiting
+  via_states: [validating, processing]
+  via_events:
+    - realtime_engine.TELEMETRY_VALIDATION_SUCCEEDED
+    - realtime_engine.TELEMETRY_PROCESSING_SUCCEEDED
+
+inputs:
+  - driver: mqtt
+    topic: "transit/vehicle/bUCR-001/data"
+    payload:
+      vehicle_id: "bUCR-001"
+      trip_id: "UCR-L1-TRIP-001"
+      lat: 9.9351
+      lon: -84.0520
+      timestamp: "{now_epoch}"
+      occupancy: 12
+      heading: 90
+
+expect:
+  observations:
+    - action: requestStateUpdate
+      within_ms: 5000
+
+timeout_ms: 10000
+tags: [ingest-telemetry, happy-path]

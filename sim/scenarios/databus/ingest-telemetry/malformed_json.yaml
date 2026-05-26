@@ -1,0 +1,23 @@
+id: ingest-telemetry-malformed-json
+fsm: ingest_telemetry
+description: MQTT payload is not valid JSON — validation fails, notify and return to waiting.
+
+expected_branch:
+  terminal_state: waiting
+  via_states: [validating, notifying]
+  via_events:
+    - realtime_engine.TELEMETRY_VALIDATION_FAILED
+    - realtime_engine.TELEMETRY_NOTIFICATION_SENT
+
+inputs:
+  - driver: mqtt
+    topic: "transit/vehicle/bUCR-001/data"
+    payload: "NOT_VALID_JSON{{{"
+
+expect:
+  observations:
+    - action: logErrors
+      within_ms: 5000
+
+timeout_ms: 8000
+tags: [ingest-telemetry, failure-path, validation]

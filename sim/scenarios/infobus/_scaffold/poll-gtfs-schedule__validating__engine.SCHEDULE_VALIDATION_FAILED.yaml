@@ -1,0 +1,15 @@
+id: poll-gtfs-schedule--validating--engine.SCHEDULE_VALIDATION_FAILED--stub
+fsm: poll-gtfs-schedule
+description: 'TODO: fill in description'
+stub: true
+
+expected_branch:
+  terminal_state: notifying
+  via_states: [validating]
+  via_events: [engine.SCHEDULE_VALIDATION_FAILED]
+
+# TODO: add inputs that drive the FSM into this failure branch
+inputs: []
+
+timeout_ms: 10000
+tags: [poll-gtfs-schedule, failure-path]

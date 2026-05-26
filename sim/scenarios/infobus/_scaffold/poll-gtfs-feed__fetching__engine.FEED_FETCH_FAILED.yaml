@@ -1,0 +1,15 @@
+id: poll-gtfs-feed--fetching--engine.FEED_FETCH_FAILED--stub
+fsm: poll-gtfs-feed
+description: 'TODO: fill in description'
+stub: true
+
+expected_branch:
+  terminal_state: notifying
+  via_states: [fetching]
+  via_events: [engine.FEED_FETCH_FAILED]
+
+# TODO: add inputs that drive the FSM into this failure branch
+inputs: []
+
+timeout_ms: 10000
+tags: [poll-gtfs-feed, failure-path]

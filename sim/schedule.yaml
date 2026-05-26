@@ -1,0 +1,28 @@
+# SIMOVI simulator schedule.
+# Schema and semantics: see sim/CONTRACTS.md §3.
+#
+# The simulator reads this file at startup and on POST /schedule/reload.
+# It is bind-mounted into the simulator container, so edits from the host
+# show up live.
+
+defaults:
+  pre_run_idle_s: 30        # vehicle starts idling/transmitting this many s before start_time
+  post_run_idle_s: 30       # vehicle keeps idling/transmitting this many s after terminal stop
+  auto_confirm_delay_s: 5   # seconds after create-run to POST run_confirmed_by_operator (if auto_confirm)
+
+runs: []
+
+# Example entry (uncomment and edit to schedule a run):
+#
+# runs:
+#   - id: "sched-001"
+#     vehicle_id: "unit-01"
+#     operator_id: "op-001"
+#     route_id: "bUCR_L1"
+#     trip_id: "trip-bUCR_L1-0001"        # must exist in databus GTFS fixture
+#     direction_id: 0
+#     shape_id: "hacia_artes"             # must exist in sim/shapes.json
+#     schedule_relationship: "SCHEDULED"
+#     start_time: "2026-05-19T16:00:00-06:00"
+#     auto_confirm: false
+#     auto_start_motion_after_s: null
