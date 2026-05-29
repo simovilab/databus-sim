@@ -1,8 +1,12 @@
 // MQTT-WS client wrapper around MQTT.js (loaded globally from CDN as `mqtt`).
 // See CONTRACTS.md §1 for the topic protocol.
 
-const DEFAULT_WS_URL = () =>
-    `ws://${location.hostname || 'localhost'}:8083/mqtt`;
+// The MQTT-WS bridge port is injected at runtime via config.js (window.SIM_CONFIG),
+// which is rendered from MQTT_WS_PORT in the environment. Falls back to 8083.
+const DEFAULT_WS_URL = () => {
+    const port = (typeof window !== 'undefined' && window.SIM_CONFIG?.mqttWsPort) || '8083';
+    return `ws://${location.hostname || 'localhost'}:${port}/mqtt`;
+};
 
 /**
  * @param {{ url?: string, onStatus?: (connected: boolean) => void }} [opts]

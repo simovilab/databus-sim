@@ -10,6 +10,7 @@ uvicorn.
 
 from __future__ import annotations
 
+import os
 from typing import Any
 
 from fastapi import FastAPI, HTTPException
@@ -106,9 +107,16 @@ class HttpControl:
 
 def _build_app(ctrl: HttpControl) -> FastAPI:
     app = FastAPI(title="SIMOVI simulator control", version="0.1.0")
+    # Comma-separated list of allowed browser origins. Defaults to the web UI on
+    # :8080; override via SIM_CORS_ORIGINS to match a different WEB_PORT.
+    cors_origins = [
+        o.strip()
+        for o in os.getenv("SIM_CORS_ORIGINS", "http://localhost:8080").split(",")
+        if o.strip()
+    ]
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=["http://localhost:8080"],
+        allow_origins=cors_origins,
         allow_methods=["GET", "PUT", "POST"],
         allow_headers=["*"],
     )

@@ -1,3 +1,8 @@
+# Rendered to /etc/nginx/conf.d/default.conf at container startup by the nginx
+# image's envsubst entrypoint. Only ${...} names present in the environment are
+# substituted; nginx runtime vars ($host, $uri, $remote_addr, …) are left
+# untouched because they are not environment variables. See .env.example.
+
 server {
     listen 80 default_server;
     server_name _;
@@ -11,7 +16,7 @@ server {
 
     # Reverse proxy to databus orchestrator (avoids CORS).
     location /databus/ {
-        proxy_pass http://host.docker.internal:8000/;
+        proxy_pass http://${DATABUS_HOST}:${DATABUS_HTTP_PORT}/;
         proxy_http_version 1.1;
         proxy_set_header Host              $host;
         proxy_set_header X-Real-IP         $remote_addr;
@@ -19,12 +24,12 @@ server {
         proxy_set_header X-Forwarded-Proto $scheme;
     }
 
-    # Reverse proxy to simulator HTTP control on :8081 (avoids mixed-origin issues).
-    # Uses compose service DNS — on Linux, hairpinning back through
+    # Reverse proxy to the simulator HTTP control API (avoids mixed-origin
+    # issues). Uses compose service DNS — on Linux, hairpinning back through
     # host.docker.internal to a sibling container's published port can be
     # blocked by iptables, so we go container-to-container directly.
     location /sim/ {
-        proxy_pass http://simulator:8081/;
+        proxy_pass http://simulator:${SIM_HTTP_PORT}/;
         proxy_http_version 1.1;
         proxy_set_header Host              $host;
         proxy_set_header X-Real-IP         $remote_addr;

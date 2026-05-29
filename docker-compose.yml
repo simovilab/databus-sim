@@ -11,18 +11,52 @@ services:
       timeout: 3s
       retries: 5
 
-  # WS-to-TCP bridge: exposes MQTT-over-WebSockets on :8083 for the browser UI,
-  # bridges every topic both ways to the databus telemetry-broker on host :1883.
+  # WS-to-TCP bridge: exposes MQTT-over-WebSockets for the browser UI and
+  # bridges every topic both ways to the databus telemetry-broker. mosquitto
+  # has no env-var support in its config, so we render the config from the
+  # environment at startup (see .env.example for the knobs).
   ws-bridge:
     image: eclipse-mosquitto:2.0
     restart: unless-stopped
-    command: ["mosquitto", "-c", "/mosquitto/config/mosquitto.conf"]
     extra_hosts:
       - "host.docker.internal:host-gateway"
-    volumes:
-      - ./broker/mosquitto-bridge.conf:/mosquitto/config/mosquitto.conf:ro
+    environment:
+      MQTT_WS_PORT: ${MQTT_WS_PORT:-8083}
+      MQTT_TCP_PORT: ${MQTT_TCP_PORT:-1884}
+      DATABUS_MQTT_HOST: ${DATABUS_MQTT_HOST:-host.docker.internal}
+      DATABUS_MQTT_PORT: ${DATABUS_MQTT_PORT:-1883}
     ports:
-      - "${MQTT_WS_PORT:-8083}:8083"
+      - "${MQTT_WS_PORT:-8083}:${MQTT_WS_PORT:-8083}"
+    command:
+      - sh
+      - -c
+      - |
+        cat > /tmp/mosquitto.conf <<EOF
+        listener $${MQTT_WS_PORT}
+        protocol websockets
+        allow_anonymous true
+
+        listener $${MQTT_TCP_PORT}
+        protocol mqtt
+        allow_anonymous true
+
+        persistence false
+        log_dest stdout
+        log_type error
+        log_type warning
+        log_type notice
+
+        connection databus
+        address $${DATABUS_MQTT_HOST}:$${DATABUS_MQTT_PORT}
+        try_private false
+        cleansession true
+        notifications false
+        start_type automatic
+        keepalive_interval 30
+
+        topic # both 0 "" ""
+        EOF
+        exec mosquitto -c /tmp/mosquitto.conf
 
   simulator:
     build:
@@ -32,13 +66,14 @@ services:
       - "host.docker.internal:host-gateway"
     environment:
       MQTT_HOST: ${MQTT_HOST:-ws-bridge}
-      MQTT_PORT: ${MQTT_PORT:-1884}
-      SIM_HTTP_PORT: "8081"
-      DATABUS_BASE_URL: ${DATABUS_BASE_URL:-http://host.docker.internal:8000}
+      MQTT_PORT: ${MQTT_TCP_PORT:-1884}
+      SIM_HTTP_PORT: ${SIM_HTTP_PORT:-8081}
+      SIM_CORS_ORIGINS: ${SIM_CORS_ORIGINS:-http://localhost:${WEB_PORT:-8080}}
+      DATABUS_BASE_URL: ${DATABUS_BASE_URL:-http://${DATABUS_HOST:-host.docker.internal}:${DATABUS_HTTP_PORT:-8000}}
       REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
       SCHEDULE_PATH: /app/schedule.yaml
     ports:
-      - "${SIM_HTTP_PORT:-8081}:8081"
+      - "${SIM_HTTP_PORT:-8081}:${SIM_HTTP_PORT:-8081}"
     volumes:
       - ./sim/schedule.yaml:/app/schedule.yaml
     depends_on:
@@ -64,6 +99,12 @@ services:
     restart: unless-stopped
     extra_hosts:
       - "host.docker.internal:host-gateway"
+    environment:
+      # Rendered into nginx.conf and config.js at container startup via envsubst.
+      DATABUS_HOST: ${DATABUS_HOST:-host.docker.internal}
+      DATABUS_HTTP_PORT: ${DATABUS_HTTP_PORT:-8000}
+      SIM_HTTP_PORT: ${SIM_HTTP_PORT:-8081}
+      MQTT_WS_PORT: ${MQTT_WS_PORT:-8083}
     ports:
       - "${WEB_PORT:-8080}:80"
 

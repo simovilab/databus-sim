@@ -12,15 +12,56 @@ Three docker services in `compose.yml`:
 
 | Service | Image | Role |
 |---|---|---|
-| `simulator` | local `sim/Dockerfile` | Publishes MQTT telemetry, exposes HTTP control on `:8081`, talks to databus |
-| `ws-bridge` | `eclipse-mosquitto:2.0` | MQTT-over-WebSockets bridge on `:8083` ↔ databus telemetry-broker on host `:1883` |
-| `web` | local `web/Dockerfile` (nginx) | Static UI on `:8080`, reverse-proxies `/sim/` → simulator and `/databus/` → orchestrator |
+| `simulator` | local `sim/Dockerfile` | Publishes MQTT telemetry, exposes HTTP control on `SIM_HTTP_PORT`, talks to databus |
+| `ws-bridge` | `eclipse-mosquitto:2.0` | MQTT-over-WebSockets bridge on `MQTT_WS_PORT` ↔ databus telemetry-broker on `DATABUS_MQTT_HOST:DATABUS_MQTT_PORT` |
+| `web` | local `web/Dockerfile` (nginx) | Static UI on `WEB_PORT`, reverse-proxies `/sim/` → simulator and `/databus/` → orchestrator |
 | `broker` (standalone only) | `emqx/nanomq:0.24.9-full` | Local MQTT broker, only when running without databus |
 
-Wired mode (default) talks to the **databus** stack on `host.docker.internal`:
-- `:8000` — orchestrator (HTTP, create/update run)
-- `:1883` — telemetry-broker (MQTT)
-- `:6379` — Redis (run lifecycle state)
+Wired mode (default) talks to the **databus** stack on `DATABUS_HOST` / `DATABUS_MQTT_HOST` (default `host.docker.internal`):
+- `DATABUS_HTTP_PORT` (default `8000`) — orchestrator (HTTP, create/update run)
+- `DATABUS_MQTT_PORT` (default `1883`) — telemetry-broker (MQTT)
+- Redis (`REDIS_URL`) — run lifecycle state
+
+**All ports and hosts are configured in a single `.env` file** so the stack can adapt to a databus deployment that uses different ports — see [Configuration](#configuration-ports--hosts) below.
+
+---
+
+## Configuration (ports & hosts)
+
+Every port the stack publishes or connects to lives in a single `.env` file at the
+repo root. Copy the template and edit only what differs from your databus setup:
+
+```bash
+cp .env.example .env
+# edit .env, then:
+docker compose up --build
+```
+
+Every value has a default baked into `docker-compose.yml`, so the stack still runs
+with no `.env` for the standard layout. `.env` is git-ignored; commit changes to
+`.env.example` instead.
+
+| Variable | Default | What it controls |
+|---|---|---|
+| `WEB_PORT` | `8080` | Host port for the browser UI |
+| `SIM_HTTP_PORT` | `8081` | Simulator FastAPI control API (host + in-container) |
+| `MQTT_WS_PORT` | `8083` | MQTT-over-WebSockets port the **browser** connects to |
+| `MQTT_TCP_PORT` | `1884` | Bridge plain-MQTT listener (simulator → bridge, in-network) |
+| `DATABUS_HOST` | `host.docker.internal` | Host where the databus orchestrator runs |
+| `DATABUS_HTTP_PORT` | `8000` | databus orchestrator REST port |
+| `DATABUS_MQTT_HOST` | `host.docker.internal` | Host of the databus telemetry broker |
+| `DATABUS_MQTT_PORT` | `1883` | databus telemetry-broker (MQTT) port |
+| `REDIS_URL` | `redis://redis:6379/0` | Redis for run-lifecycle state |
+
+These three files have no native env support and are rendered from `.env` at
+container startup, so you never edit them by hand:
+
+- **mosquitto bridge config** → rendered inline by the `ws-bridge` service `command` in `docker-compose.yml`.
+- **`web/nginx.conf.template`** → rendered to `default.conf` by nginx's `envsubst` entrypoint.
+- **`web/config.js.template`** → rendered to `config.js`, which tells the browser the `MQTT_WS_PORT`.
+
+> The `sim/harness/` test harness reads its own env vars (`DATABUS_BACKEND_URL`,
+> `MQTT_HOST`, `MQTT_PORT`, …) and is independent of this `.env`. See `sim/README_TESTING.md`.
 
 ---
 
@@ -149,14 +190,19 @@ cd sim && uv sync && uv run python -m sim.simulator [flags]
 
 ### Environment variables
 
+These are read by the simulator **process**. Inside the compose stack they are
+wired from `.env` (see [Configuration](#configuration-ports--hosts)); the defaults
+below apply when running the process bare (e.g. `python -m sim.simulator`).
+
 | Variable | Default | Purpose |
 |---|---|---|
-| `MQTT_HOST` | `host.docker.internal` | MQTT broker host |
-| `MQTT_PORT` | `1883` | MQTT broker port |
+| `MQTT_HOST` | `localhost` | MQTT broker host (compose: `ws-bridge`) |
+| `MQTT_PORT` | `1883` | MQTT broker port (compose: `MQTT_TCP_PORT`, `1884`) |
 | `MQTT_TOPIC_ROOT` | `transit/vehicle` | Topic prefix for telemetry |
-| `DATABUS_BASE_URL` | `http://host.docker.internal:8000` | Orchestrator HTTP base |
-| `REDIS_URL` | `redis://host.docker.internal:6379/0` | Redis URL for run state polling |
+| `DATABUS_BASE_URL` | `http://localhost:8000` | Orchestrator HTTP base (compose: built from `DATABUS_HOST`/`DATABUS_HTTP_PORT`) |
+| `REDIS_URL` | `redis://localhost:6379/0` | Redis URL for run state polling |
 | `SIM_HTTP_PORT` | `8081` | FastAPI control port |
+| `SIM_CORS_ORIGINS` | `http://localhost:8080` | Comma-separated browser origins allowed by CORS (compose: `http://localhost:${WEB_PORT}`) |
 | `SCHEDULE_PATH` | `/app/schedule.yaml` | Path to schedule file (bind-mounted) |
 | `POST_RUN_IDLE_S` | `30` | Seconds a vehicle keeps transmitting after reaching the terminal stop |
 | `RUN_POLL_INTERVAL_S` | `2.0` | How often `RunBinder` polls Redis |

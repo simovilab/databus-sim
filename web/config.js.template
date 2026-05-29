@@ -1,0 +1,6 @@
+// Rendered to /usr/share/nginx/html/config.js at container startup (see
+// docker-entrypoint.d/40-config-js.sh). Lets the browser learn which host port
+// the MQTT-over-WebSockets bridge is published on without hardcoding it.
+window.SIM_CONFIG = {
+    mqttWsPort: "${MQTT_WS_PORT}",
+};
