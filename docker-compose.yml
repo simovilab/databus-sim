@@ -1,16 +1,4 @@
 services:
-  redis:
-    image: redis:7-alpine
-    ports:
-      - "6379:6379"
-    volumes:
-      - redis_data:/data
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 10s
-      timeout: 3s
-      retries: 5
-
   # WS-to-TCP bridge: exposes MQTT-over-WebSockets for the browser UI and
   # bridges every topic both ways to the databus telemetry-broker. mosquitto
   # has no env-var support in its config, so we render the config from the
@@ -70,15 +58,11 @@ services:
       SIM_HTTP_PORT: ${SIM_HTTP_PORT:-8081}
       SIM_CORS_ORIGINS: ${SIM_CORS_ORIGINS:-http://localhost:${WEB_PORT:-8080}}
       DATABUS_BASE_URL: ${DATABUS_BASE_URL:-http://${DATABUS_HOST:-host.docker.internal}:${DATABUS_HTTP_PORT:-8000}}
-      REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
       SCHEDULE_PATH: /app/schedule.yaml
     ports:
       - "${SIM_HTTP_PORT:-8081}:${SIM_HTTP_PORT:-8081}"
     volumes:
       - ./sim/schedule.yaml:/app/schedule.yaml
-    depends_on:
-      redis:
-        condition: service_healthy
     command:
       - uv
       - run
@@ -107,6 +91,3 @@ services:
       MQTT_WS_PORT: ${MQTT_WS_PORT:-8083}
     ports:
       - "${WEB_PORT:-8080}:80"
-
-volumes:
-  redis_data:

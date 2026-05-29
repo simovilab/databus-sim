@@ -5,20 +5,22 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock, AsyncMock
-import tempfile
-import os
 
 import pytest
 from fastapi.testclient import TestClient
 
-import fakeredis.aioredis as fake_aio
-
 from sim.fleet import FLEET, FleetState
 from sim.http_control import HttpControl, ScheduleDocument
-from sim.redis_client import RedisClient
 from sim.scheduler import Scheduler
 from sim.databus_client import DatabusClient
 from sim.run_binder import RunBinder
+
+
+def _mock_databus(run_hash: dict[str, str] | None = None) -> MagicMock:
+    """A DatabusClient mock whose async get_run_hash returns ``run_hash`` (or {})."""
+    db = MagicMock(spec=DatabusClient)
+    db.get_run_hash = AsyncMock(return_value=run_hash or {})
+    return db
 
 
 # ---------------------------------------------------------------------------
@@ -52,16 +54,8 @@ def fleet() -> FleetState:
 
 
 @pytest.fixture
-async def redis_client() -> RedisClient:
-    server = fake_aio.FakeRedis(decode_responses=True)
-    client = RedisClient(client=server)
-    async with client:
-        yield client
-
-
-@pytest.fixture
-def scheduler(tmp_schedule: Path, fleet: FleetState, redis_client: RedisClient) -> Scheduler:
-    db = MagicMock(spec=DatabusClient)
+def scheduler(tmp_schedule: Path, fleet: FleetState) -> Scheduler:
+    db = _mock_databus()
     binder = MagicMock(spec=RunBinder)
     s = Scheduler(path=tmp_schedule, fleet=fleet, databus=db, binder=binder)
     s.load()
@@ -69,8 +63,13 @@ def scheduler(tmp_schedule: Path, fleet: FleetState, redis_client: RedisClient) 
 
 
 @pytest.fixture
-def client(fleet: FleetState, scheduler: Scheduler, redis_client: RedisClient) -> TestClient:
-    ctrl = HttpControl(fleet=fleet, scheduler=scheduler, redis_client=redis_client)
+def client(fleet: FleetState, scheduler: Scheduler) -> TestClient:
+    ctrl = HttpControl(
+        fleet=fleet,
+        scheduler=scheduler,
+        binder=MagicMock(spec=RunBinder),
+        databus=_mock_databus(),
+    )
     return TestClient(ctrl.app, raise_server_exceptions=True)
 
 
@@ -101,11 +100,7 @@ def test_get_schedule_empty(client: TestClient) -> None:
 def test_get_schedule_with_entry(
     tmp_path: Path,
     fleet: FleetState,
-    redis_client: RedisClient,
 ) -> None:
-    from sim.databus_client import DatabusClient
-    from sim.run_binder import RunBinder
-
     path = _make_schedule_yaml(
         tmp_path,
         runs=[
@@ -124,12 +119,12 @@ def test_get_schedule_with_entry(
             }
         ],
     )
-    db = MagicMock(spec=DatabusClient)
+    db = _mock_databus()
     binder = MagicMock(spec=RunBinder)
     s = Scheduler(path=path, fleet=fleet, databus=db, binder=binder)
     s.load()
 
-    ctrl = HttpControl(fleet=fleet, scheduler=s, redis_client=redis_client)
+    ctrl = HttpControl(fleet=fleet, scheduler=s, binder=binder, databus=db)
     c = TestClient(ctrl.app)
     resp = c.get("/schedule")
     assert resp.status_code == 200
@@ -221,21 +216,18 @@ def test_get_fleet(client: TestClient) -> None:
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.asyncio
-async def test_get_run_found(
+def test_get_run_found(
     fleet: FleetState,
     scheduler: Scheduler,
 ) -> None:
-    server = fake_aio.FakeRedis(decode_responses=True)
-    await server.hset(
-        "run:test-run-1",
-        mapping={"run_lifecycle_state": "Confirmed", "vehicle_id": "unit-01"},
+    db = _mock_databus(
+        {"run_lifecycle_state": "Confirmed", "vehicle_id": "unit-01"}
     )
-    redis_client = RedisClient(client=server)
-    async with redis_client:
-        ctrl = HttpControl(fleet=fleet, scheduler=scheduler, redis_client=redis_client)
-        c = TestClient(ctrl.app)
-        resp = c.get("/run/test-run-1")
+    ctrl = HttpControl(
+        fleet=fleet, scheduler=scheduler, binder=MagicMock(spec=RunBinder), databus=db
+    )
+    c = TestClient(ctrl.app)
+    resp = c.get("/run/test-run-1")
     assert resp.status_code == 200
     body = resp.json()
     assert body["run_id"] == "test-run-1"
@@ -243,15 +235,14 @@ async def test_get_run_found(
     assert body["fields"]["vehicle_id"] == "unit-01"
 
 
-@pytest.mark.asyncio
-async def test_get_run_not_found(
+def test_get_run_not_found(
     fleet: FleetState,
     scheduler: Scheduler,
 ) -> None:
-    server = fake_aio.FakeRedis(decode_responses=True)
-    redis_client = RedisClient(client=server)
-    async with redis_client:
-        ctrl = HttpControl(fleet=fleet, scheduler=scheduler, redis_client=redis_client)
-        c = TestClient(ctrl.app)
-        resp = c.get("/run/no-such-run")
+    db = _mock_databus({})  # empty → 404, mirrors a databus 404
+    ctrl = HttpControl(
+        fleet=fleet, scheduler=scheduler, binder=MagicMock(spec=RunBinder), databus=db
+    )
+    c = TestClient(ctrl.app)
+    resp = c.get("/run/no-such-run")
     assert resp.status_code == 404

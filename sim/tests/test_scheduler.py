@@ -1,4 +1,4 @@
-"""Unit tests for sim.scheduler using respx + fakeredis + a fake state_publisher."""
+"""Unit tests for sim.scheduler using respx + a fake state_publisher."""
 
 from __future__ import annotations
 

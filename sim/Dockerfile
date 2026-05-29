@@ -12,7 +12,7 @@ RUN uv sync --frozen --no-dev
 # Install the sim package into /app/sim so relative imports (from .fleet ...) work.
 COPY __init__.py shapes.json /app/sim/
 COPY simulator.py extract_shapes.py fleet.py controller.py state_publisher.py \
-     databus_client.py redis_client.py run_binder.py http_control.py scheduler.py \
+     databus_client.py run_binder.py http_control.py scheduler.py \
      /app/sim/
 
 ENV PYTHONPATH=/app

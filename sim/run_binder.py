@@ -1,8 +1,8 @@
-"""Vehicle ↔ run binder: polls Redis for run-lifecycle state and drives fleet.
+"""Vehicle ↔ run binder: polls databus for run-lifecycle state and drives fleet.
 
-Owned by Agent B (B1). P0 fixes the polling interface, the Redis key contract
-(see ``CONTRACTS.md`` §6), and the callback shape. B1 implements the loop and
-fleet mutations.
+Run state is read over HTTP from databus (``GET /api/run/{run_id}/`` via
+:class:`~sim.databus_client.DatabusClient`); the simulator keeps no Redis
+dependency. B1 implements the loop and fleet mutations.
 """
 
 from __future__ import annotations
@@ -15,16 +15,16 @@ from datetime import datetime
 from typing import Any, Callable
 
 from .fleet import FleetState
-from .redis_client import RedisClient
+from .databus_client import DatabusClient
 
 
 log = logging.getLogger(__name__)
 
 _POLL_INTERVAL_S = float(os.getenv("RUN_POLL_INTERVAL_S", "2.0"))
 _UNTRACK_DELAY_S = 5.0  # hold terminal state visible before dropping from tracking
-# Grace window for brand-new runs that haven't appeared in Redis yet.
-# After this many seconds with no Redis key, treat the run as lost.
-_REDIS_GRACE_S = 30.0
+# Grace window for brand-new runs databus hasn't registered yet. After this many
+# seconds with the run still not found (404), treat it as lost.
+_RUN_LOST_GRACE_S = 30.0
 
 
 @dataclass
@@ -44,10 +44,10 @@ StateChangeCallback = Callable[[str, str | None, str], None]
 
 
 class RunBinder:
-    """Maintain ``run_id → BoundRun`` and poll Redis for state changes.
+    """Maintain ``run_id → BoundRun`` and poll databus for state changes.
 
     Wiring (set at boot):
-        binder = RunBinder(fleet_state, redis_client)
+        binder = RunBinder(fleet_state, databus_client)
         binder.on_state_change = callback
     """
 
@@ -60,11 +60,11 @@ class RunBinder:
     def __init__(
         self,
         fleet: FleetState,
-        redis_client: RedisClient,
+        databus: DatabusClient,
         poll_interval_s: float = _POLL_INTERVAL_S,
     ) -> None:
         self.fleet = fleet
-        self.redis_client = redis_client
+        self.databus = databus
         self.poll_interval_s = poll_interval_s
         self._bindings: dict[str, BoundRun] = {}
         self.on_state_change: StateChangeCallback | None = None
@@ -101,7 +101,7 @@ class RunBinder:
     # --- poller ------------------------------------------------------------
 
     async def poll_loop(self) -> None:
-        """Repeat: for each binding, fetch state from Redis; on change fire callback."""
+        """Repeat: for each binding, fetch state from databus; on change fire callback."""
         log.info("run_binder.poll_loop started interval=%.1fs", self.poll_interval_s)
         while True:
             await asyncio.sleep(self.poll_interval_s)
@@ -112,21 +112,21 @@ class RunBinder:
                 if binding.lifecycle_state in self.TERMINAL_STATES:
                     continue  # already terminal — skip
                 try:
-                    new_state = await self.redis_client.get_run_state(run_id)
+                    new_state = await self.databus.get_run_state(run_id)
                 except Exception as exc:
                     log.warning("run_binder.poll error run_id=%s: %s", run_id, exc)
                     continue
                 if new_state is None:
-                    # Redis key is gone (e.g. databus restarted and wiped state).
+                    # Run not found (404) — e.g. databus restarted and lost state.
                     # If we've ever seen a state, or the grace window has elapsed,
                     # force-unbind so the vehicle doesn't stay locked indefinitely.
                     grace_elapsed = (
                         (datetime.now() - binding.tracked_since).total_seconds()
-                        > _REDIS_GRACE_S
+                        > _RUN_LOST_GRACE_S
                     )
                     if binding.lifecycle_state is not None or grace_elapsed:
                         log.warning(
-                            "run_binder.lost run_id=%s last_state=%s — Redis key gone, force-unbinding",
+                            "run_binder.lost run_id=%s last_state=%s — run not found, force-unbinding",
                             run_id,
                             binding.lifecycle_state,
                         )
@@ -151,7 +151,7 @@ class RunBinder:
                         )
 
     def _apply_state(self, binding: BoundRun, new_state: str) -> None:
-        """Map a Redis state change onto :class:`FleetState`.
+        """Map a run-lifecycle state change onto :class:`FleetState`.
 
         Mapping (see ``CONTRACTS.md`` §6 and PLAN.md B1):
           Confirmed → bind_run + transmitting=True, moving=False
@@ -167,7 +167,8 @@ class RunBinder:
         self.fleet.set_lifecycle_state(vid, new_state)
 
         if new_state == "Confirmed":
-            # (1) bind run fields first so the Redis key exists before pings start
+            # (1) bind run fields first, before pings start (CONTRACTS.md §7.4):
+            # databus's consumer drops pings while vehicle:{id}:current_run is unset.
             self.fleet.bind_run(
                 vid,
                 binding.run_id,
@@ -191,7 +192,7 @@ class RunBinder:
             self.fleet.unbind_run(vid)
 
     def _force_unbind(self, binding: BoundRun) -> None:
-        """Unbind a vehicle when its Redis key has disappeared (databus restart, etc.)."""
+        """Unbind a vehicle when its run is no longer found (databus restart, etc.)."""
         self.fleet.unbind_run(binding.vehicle_id)
         self.untrack(binding.run_id)
 

@@ -4,7 +4,7 @@ Owned by Agent B (B1). P0 defines the route surface (see ``CONTRACTS.md`` §2)
 as stubs that raise :class:`NotImplementedError`. B1 fills in the bodies.
 
 The :class:`HttpControl` object is the wiring seam: ``simulator.py`` will
-construct it with the fleet/scheduler/redis instances and pass ``app`` to
+construct it with the fleet/scheduler/databus instances and pass ``app`` to
 uvicorn.
 """
 
@@ -19,7 +19,6 @@ from pydantic import BaseModel
 
 from .databus_client import DatabusClient
 from .fleet import FleetState
-from .redis_client import RedisClient
 from .run_binder import RunBinder
 from .scheduler import Scheduler
 
@@ -93,13 +92,11 @@ class HttpControl:
         self,
         fleet: FleetState,
         scheduler: Scheduler,
-        redis_client: RedisClient,
         binder: RunBinder,
         databus: DatabusClient,
     ) -> None:
         self.fleet = fleet
         self.scheduler = scheduler
-        self.redis_client = redis_client
         self.binder = binder
         self.databus = databus
         self.app = _build_app(self)
@@ -146,9 +143,9 @@ def _build_app(ctrl: HttpControl) -> FastAPI:
 
     @app.get("/run/{run_id}")
     async def get_run(run_id: str) -> RunStateResponse:
-        fields = await ctrl.redis_client.get_run_hash(run_id)
+        fields = await ctrl.databus.get_run_hash(run_id)
         if not fields:
-            raise HTTPException(status_code=404, detail=f"run {run_id!r} not found in Redis")
+            raise HTTPException(status_code=404, detail=f"run {run_id!r} not found")
         lifecycle_state = fields.get("run_lifecycle_state")
         return RunStateResponse(run_id=run_id, run_lifecycle_state=lifecycle_state, fields=fields)
 

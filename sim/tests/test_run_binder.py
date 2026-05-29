@@ -1,16 +1,27 @@
-"""Unit tests for sim.run_binder using fakeredis."""
+"""Unit tests for sim.run_binder using a fake databus HTTP client."""
 
 from __future__ import annotations
 
 import asyncio
-from unittest.mock import MagicMock
 
-import fakeredis.aioredis as fake_aio
 import pytest
 
 from sim.fleet import FLEET, FleetState
-from sim.redis_client import RedisClient
 from sim.run_binder import BoundRun, RunBinder
+
+
+class FakeDatabus:
+    """Stand-in for DatabusClient.get_run_state backed by an in-memory map.
+
+    ``states[run_id]`` → current ``run_lifecycle_state``; a missing key
+    returns ``None`` (mirrors a 404 from ``GET /api/run/{run_id}/``).
+    """
+
+    def __init__(self) -> None:
+        self.states: dict[str, str | None] = {}
+
+    async def get_run_state(self, run_id: str) -> str | None:
+        return self.states.get(run_id)
 
 
 @pytest.fixture
@@ -19,16 +30,13 @@ def fleet() -> FleetState:
 
 
 @pytest.fixture
-async def redis_client() -> RedisClient:
-    server = fake_aio.FakeRedis(decode_responses=True)
-    client = RedisClient(client=server)
-    async with client:
-        yield client
+def databus() -> FakeDatabus:
+    return FakeDatabus()
 
 
 @pytest.fixture
-def binder(fleet: FleetState, redis_client: RedisClient) -> RunBinder:
-    return RunBinder(fleet=fleet, redis_client=redis_client, poll_interval_s=0.05)
+def binder(fleet: FleetState, databus: FakeDatabus) -> RunBinder:
+    return RunBinder(fleet=fleet, databus=databus, poll_interval_s=0.05)
 
 
 # ---------------------------------------------------------------------------
@@ -139,7 +147,7 @@ def test_apply_tracking_no_fleet_change(binder: RunBinder, fleet: FleetState) ->
 @pytest.mark.asyncio
 async def test_poll_loop_fires_state_change_callback(
     binder: RunBinder,
-    redis_client: RedisClient,
+    databus: FakeDatabus,
     fleet: FleetState,
 ) -> None:
     fleet.bind_run = lambda *a, **kw: None  # type: ignore
@@ -148,8 +156,8 @@ async def test_poll_loop_fires_state_change_callback(
     fleet.set_moving = lambda *a: None  # type: ignore
     fleet.set_lifecycle_state = lambda *a: None  # type: ignore
 
-    # Pre-seed Redis with Initialized state
-    await redis_client._client.hset("run:poll-1", "run_lifecycle_state", "Initialized")
+    # databus reports Initialized for this run
+    databus.states["poll-1"] = "Initialized"
     binder.track("poll-1", "unit-01", "trip-001", "hacia_artes")
 
     changes: list = []
@@ -169,7 +177,7 @@ async def test_poll_loop_fires_state_change_callback(
 @pytest.mark.asyncio
 async def test_poll_loop_confirmed_to_completed(
     binder: RunBinder,
-    redis_client: RedisClient,
+    databus: FakeDatabus,
     fleet: FleetState,
 ) -> None:
     fleet.bind_run = lambda *a, **kw: None  # type: ignore
@@ -178,7 +186,7 @@ async def test_poll_loop_confirmed_to_completed(
     fleet.set_moving = lambda *a: None  # type: ignore
     fleet.set_lifecycle_state = lambda *a: None  # type: ignore
 
-    await redis_client._client.hset("run:seq-1", "run_lifecycle_state", "Confirmed")
+    databus.states["seq-1"] = "Confirmed"
     binder.track("seq-1", "unit-01", "trip-001", "hacia_artes")
 
     transitions: list = []
@@ -188,7 +196,7 @@ async def test_poll_loop_confirmed_to_completed(
     # After first poll: Confirmed
     await asyncio.sleep(0.15)
     # Advance to Completed
-    await redis_client._client.hset("run:seq-1", "run_lifecycle_state", "Completed")
+    databus.states["seq-1"] = "Completed"
     await asyncio.sleep(0.15)
     task.cancel()
     try:
@@ -204,7 +212,7 @@ async def test_poll_loop_confirmed_to_completed(
 @pytest.mark.asyncio
 async def test_poll_loop_cancelled_path(
     binder: RunBinder,
-    redis_client: RedisClient,
+    databus: FakeDatabus,
     fleet: FleetState,
 ) -> None:
     fleet.bind_run = lambda *a, **kw: None  # type: ignore
@@ -213,7 +221,7 @@ async def test_poll_loop_cancelled_path(
     fleet.set_moving = lambda *a: None  # type: ignore
     fleet.set_lifecycle_state = lambda *a: None  # type: ignore
 
-    await redis_client._client.hset("run:cancel-1", "run_lifecycle_state", "Cancelled")
+    databus.states["cancel-1"] = "Cancelled"
     binder.track("cancel-1", "unit-01", "trip-001", "hacia_artes")
 
     transitions: list = []
@@ -229,3 +237,68 @@ async def test_poll_loop_cancelled_path(
 
     states = [new for _, new in transitions]
     assert "Cancelled" in states
+
+
+@pytest.mark.asyncio
+async def test_poll_loop_calls_get_run_state_each_tick(
+    binder: RunBinder,
+    databus: FakeDatabus,
+    fleet: FleetState,
+) -> None:
+    fleet.bind_run = lambda *a, **kw: None  # type: ignore
+    fleet.unbind_run = lambda *a: None  # type: ignore
+    fleet.set_transmitting = lambda *a: None  # type: ignore
+    fleet.set_moving = lambda *a: None  # type: ignore
+    fleet.set_lifecycle_state = lambda *a: None  # type: ignore
+
+    seen: list[str] = []
+    databus.states["tick-1"] = "Confirmed"
+
+    async def _spy(run_id: str) -> str | None:
+        seen.append(run_id)
+        return databus.states.get(run_id)
+
+    databus.get_run_state = _spy  # type: ignore[method-assign]
+    binder.track("tick-1", "unit-01", "trip-001", "hacia_artes")
+
+    task = asyncio.create_task(binder.poll_loop())
+    await asyncio.sleep(0.18)  # ~3 ticks at 0.05s
+    task.cancel()
+    try:
+        await task
+    except asyncio.CancelledError:
+        pass
+
+    assert seen, "poll_loop never polled databus.get_run_state"
+    assert all(rid == "tick-1" for rid in seen)
+
+
+@pytest.mark.asyncio
+async def test_poll_loop_run_not_found_force_unbinds(
+    binder: RunBinder,
+    databus: FakeDatabus,
+    fleet: FleetState,
+) -> None:
+    """A 404 (None) after a state was seen → force-unbind, drop the binding."""
+    fleet.bind_run = lambda *a, **kw: None  # type: ignore
+    fleet.set_transmitting = lambda *a: None  # type: ignore
+    fleet.set_moving = lambda *a: None  # type: ignore
+    fleet.set_lifecycle_state = lambda *a: None  # type: ignore
+    unbound: list[str] = []
+    fleet.unbind_run = lambda vid: unbound.append(vid)  # type: ignore
+
+    databus.states["gone-1"] = "Confirmed"
+    binder.track("gone-1", "unit-01", "trip-001", "hacia_artes")
+
+    task = asyncio.create_task(binder.poll_loop())
+    await asyncio.sleep(0.15)  # observe Confirmed
+    databus.states["gone-1"] = None  # databus now 404s the run
+    await asyncio.sleep(0.15)
+    task.cancel()
+    try:
+        await task
+    except asyncio.CancelledError:
+        pass
+
+    assert "unit-01" in unbound
+    assert binder.bindings() == []

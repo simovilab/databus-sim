@@ -18,9 +18,10 @@ Three docker services in `compose.yml`:
 | `broker` (standalone only) | `emqx/nanomq:0.24.9-full` | Local MQTT broker, only when running without databus |
 
 Wired mode (default) talks to the **databus** stack on `DATABUS_HOST` / `DATABUS_MQTT_HOST` (default `host.docker.internal`):
-- `DATABUS_HTTP_PORT` (default `8000`) — orchestrator (HTTP, create/update run)
+- `DATABUS_HTTP_PORT` (default `8000`) — orchestrator (HTTP: create/update run **and read run-lifecycle state**)
 - `DATABUS_MQTT_PORT` (default `1883`) — telemetry-broker (MQTT)
-- Redis (`REDIS_URL`) — run lifecycle state
+
+The simulator reads run-lifecycle state over HTTP (`GET /api/run/{run_id}/`); it has **no Redis dependency** and never touches databus's Redis, keeping the two stacks independent.
 
 **All ports and hosts are configured in a single `.env` file** so the stack can adapt to a databus deployment that uses different ports — see [Configuration](#configuration-ports--hosts) below.
 
@@ -51,7 +52,6 @@ with no `.env` for the standard layout. `.env` is git-ignored; commit changes to
 | `DATABUS_HTTP_PORT` | `8000` | databus orchestrator REST port |
 | `DATABUS_MQTT_HOST` | `host.docker.internal` | Host of the databus telemetry broker |
 | `DATABUS_MQTT_PORT` | `1883` | databus telemetry-broker (MQTT) port |
-| `REDIS_URL` | `redis://redis:6379/0` | Redis for run-lifecycle state |
 
 These three files have no native env support and are rendered from `.env` at
 container startup, so you never edit them by hand:
@@ -137,12 +137,12 @@ Four tabs at `http://localhost:8080`:
 1. Open **Operator** → **Request Run** → pick a vehicle, trip (loaded from databus), and operator ID.
 2. The run is created in databus (state: `Initialized`).
 3. Click the run in the **Runs** tab → POST `run_confirmed_by_operator` via `/api/update-run/`.
-4. Databus transitions `Initialized → Confirmed`. The simulator's `RunBinder` notices via Redis and:
+4. Databus transitions `Initialized → Confirmed`. The simulator's `RunBinder` notices by polling `GET /api/run/{run_id}/` and:
    - binds the vehicle to the run,
    - resets `progress_m = 0`,
    - sets `transmitting = True`.
 5. As MQTT pings arrive at the databus realtime-engine, the run advances `Confirmed → Tracking → InProgress`.
-6. To end: click **Cancel** / **Interrupt** / **Short-turn** in the Runs tab. The terminal state propagates back through Redis and the simulator unbinds the vehicle.
+6. To end: click **Cancel** / **Interrupt** / **Short-turn** in the Runs tab. The terminal state is picked up on the next poll and the simulator unbinds the vehicle.
 
 ### Scheduled flow
 
@@ -199,13 +199,12 @@ below apply when running the process bare (e.g. `python -m sim.simulator`).
 | `MQTT_HOST` | `localhost` | MQTT broker host (compose: `ws-bridge`) |
 | `MQTT_PORT` | `1883` | MQTT broker port (compose: `MQTT_TCP_PORT`, `1884`) |
 | `MQTT_TOPIC_ROOT` | `transit/vehicle` | Topic prefix for telemetry |
-| `DATABUS_BASE_URL` | `http://localhost:8000` | Orchestrator HTTP base (compose: built from `DATABUS_HOST`/`DATABUS_HTTP_PORT`) |
-| `REDIS_URL` | `redis://localhost:6379/0` | Redis URL for run state polling |
+| `DATABUS_BASE_URL` | `http://localhost:8000` | Orchestrator HTTP base — create/update run + read run state (compose: built from `DATABUS_HOST`/`DATABUS_HTTP_PORT`) |
 | `SIM_HTTP_PORT` | `8081` | FastAPI control port |
 | `SIM_CORS_ORIGINS` | `http://localhost:8080` | Comma-separated browser origins allowed by CORS (compose: `http://localhost:${WEB_PORT}`) |
 | `SCHEDULE_PATH` | `/app/schedule.yaml` | Path to schedule file (bind-mounted) |
 | `POST_RUN_IDLE_S` | `30` | Seconds a vehicle keeps transmitting after reaching the terminal stop |
-| `RUN_POLL_INTERVAL_S` | `2.0` | How often `RunBinder` polls Redis |
+| `RUN_POLL_INTERVAL_S` | `2.0` | How often `RunBinder` polls databus for run state |
 
 ---
 
@@ -218,7 +217,7 @@ below apply when running the process bare (e.g. `python -m sim.simulator`).
 | `GET` | `/schedule` | Current `schedule.yaml` + per-entry status |
 | `PUT` | `/schedule` | Overwrite `schedule.yaml` (atomic write + reload) |
 | `POST` | `/schedule/reload` | Re-read `schedule.yaml` from disk |
-| `GET` | `/run/{run_id}` | Pull-through read of Redis `run:{id}` hash |
+| `GET` | `/run/{run_id}` | Pull-through read of databus run state (`GET /api/run/{run_id}/`) |
 
 ---
 
@@ -245,7 +244,7 @@ For map visualization only — no run lifecycle, no databus, no Redis:
 docker compose --profile standalone up broker simulator web
 ```
 
-Brings up a local NanoMQ broker on `:1883` / `:8083`. The simulator will publish telemetry but `RunBinder` and `Scheduler` will log connection errors against Redis/databus, which can be ignored.
+Brings up a local NanoMQ broker on `:1883` / `:8083`. The simulator will publish telemetry but `RunBinder` and `Scheduler` will log connection errors against databus, which can be ignored.
 
 ---
 
@@ -255,9 +254,9 @@ Brings up a local NanoMQ broker on `:1883` / `:8083`. The simulator will publish
 You skipped the **Seed databus** step above. Run the one-liner.
 
 ### A run is stuck in `InProgress` and won't cancel after a databus restart
-Cause: databus restart wiped Redis. The simulator's `RunBinder` keeps the vehicle bound. The cancel button calls databus, but databus no longer has the run.
+Cause: databus restart lost the run's state. The simulator's `RunBinder` keeps the vehicle bound. The cancel button calls databus, but databus no longer has the run.
 
-Fix (already in code as of the `RunBinder._force_unbind` change): wait ~2 s after a databus restart and the simulator will log `run_binder.lost … force-unbinding` and clear the binding automatically.
+Fix (already in code as of the `RunBinder._force_unbind` change): wait ~2 s after a databus restart and the simulator will log `run_binder.lost … force-unbinding` and clear the binding automatically — a `404` from `GET /api/run/{run_id}/` is treated exactly as a lost run.
 
 To clean up the browser side too:
 ```js
@@ -279,7 +278,7 @@ Then reload.
 
 ## Local debugging
 
-Concrete commands for inspecting MQTT traffic, Redis state, HTTP endpoints, and logs while the stack is up.
+Concrete commands for inspecting MQTT traffic, run state, HTTP endpoints, and logs while the stack is up.
 
 ### Watch MQTT traffic
 
@@ -346,33 +345,25 @@ Topic surface (full table in `sim/CONTRACTS.md` §1.1):
 `sim/control/<vehicle_id>/{transmit,moving,speed,occupancy,dwell,jump_to_terminal,set_progress,inject_fault}` and
 `sim/control/global/{start_run,reload_schedule}`.
 
-### Inspect Redis run state
+### Inspect run state
 
-The simulator's `RunBinder` polls these keys; reading them directly tells you exactly what state the binder will see next tick.
+The simulator's `RunBinder` polls `GET /api/run/{run_id}/` on databus; hitting
+that endpoint directly tells you exactly what state the binder will see next
+tick. No Redis access required.
 
 ```bash
-# Find the Redis container name
-docker compose -f ../databus/compose.dev.yml ps state
+# Read run state straight from databus (what RunBinder polls)
+curl -s http://localhost:8000/api/run/<run_id>/ | jq
 
-# All run keys
-docker exec databus-dev-state-1 redis-cli KEYS 'run:*'
-
-# Full hash for one run
-docker exec databus-dev-state-1 redis-cli HGETALL run:<run_id>
-
-# Just the lifecycle state field (what RunBinder reads)
-docker exec databus-dev-state-1 redis-cli HGET run:<run_id> run_lifecycle_state
+# Just the lifecycle state field
+curl -s http://localhost:8000/api/run/<run_id>/ | jq -r '.run_lifecycle_state'
 
 # Watch state changes in real time (re-prints every 1 s)
-watch -n 1 "docker exec databus-dev-state-1 redis-cli HGET run:<run_id> run_lifecycle_state"
-
-# Interactive shell
-docker exec -it databus-dev-state-1 redis-cli
-> KEYS *
-> MONITOR     # streams every Redis command live — Ctrl-C to exit
+watch -n 1 "curl -s http://localhost:8000/api/run/<run_id>/ | jq -r '.run_lifecycle_state'"
 ```
 
-If `KEYS run:*` returns nothing but the UI shows a bound run, that's the "stuck run" scenario — see Troubleshooting above.
+A `404` from `/api/run/<run_id>/` while the UI shows a bound run is the
+"stuck run" scenario — see Troubleshooting above.
 
 ### Hit the simulator HTTP control directly
 
@@ -386,7 +377,7 @@ curl -s http://localhost:8081/fleet | jq
 # Schedule (with per-entry pending/requested/initialized/failed status)
 curl -s http://localhost:8081/schedule | jq
 
-# Pull-through read of Redis for one run
+# Pull-through read of databus run state for one run
 curl -s http://localhost:8081/run/<run_id> | jq
 
 # Force a schedule reload from disk
@@ -441,8 +432,8 @@ curl -s http://localhost:8081/fleet | jq '.vehicles[] | select(.vehicle_id=="uni
 docker run --rm -it --network=host eclipse-mosquitto:2.0 \
   mosquitto_sub -h localhost -p 1883 -t 'transit/vehicle/unit-01/+' -v -C 3
 
-# 3. Realtime-engine is updating Redis:
-docker exec databus-dev-state-1 redis-cli HGETALL run:<run_id>
+# 3. Realtime-engine is advancing run state (what RunBinder polls):
+curl -s http://localhost:8000/api/run/<run_id>/ | jq -r '.run_lifecycle_state'
 ```
 
 If (1) is good but (2) is silent, the simulator can't reach the broker — check `MQTT_HOST` and the ws-bridge.
@@ -454,12 +445,11 @@ If (2) is good but (3) doesn't advance past `Confirmed`, the realtime-engine isn
 
 ```
 simulator/
-├── compose.yml                # broker + simulator + ws-bridge + web
-├── broker/
-│   ├── nanomq.conf            # standalone broker config
-│   └── mosquitto-bridge.conf  # WS-to-TCP bridge config
+├── docker-compose.yml         # ws-bridge + simulator + web
+├── .env.example               # all ports & hosts (copy to .env)
 ├── web/                       # static UI (nginx)
-│   ├── nginx.conf             # reverse-proxies /sim/ and /databus/
+│   ├── nginx.conf.template    # envsubst → reverse-proxies /sim/ and /databus/
+│   ├── config.js.template     # envsubst → window.SIM_CONFIG (MQTT_WS_PORT)
 │   ├── index.html, app.js, style.css
 │   ├── lib/  modals/  tabs/
 └── sim/
@@ -467,9 +457,8 @@ simulator/
     ├── fleet.py               # FleetState + 6-vehicle roster
     ├── controller.py          # MQTT control subscriber
     ├── state_publisher.py     # MQTT state publisher
-    ├── databus_client.py      # HTTP client for /api/create-run, /api/update-run
-    ├── redis_client.py        # async Redis reader for run:{id} hash
-    ├── run_binder.py          # polls Redis → drives FleetState
+    ├── databus_client.py      # HTTP client: create-run, update-run, run state
+    ├── run_binder.py          # polls databus run state → drives FleetState
     ├── scheduler.py           # reads schedule.yaml → fires create-run
     ├── http_control.py        # FastAPI on :8081
     ├── shapes.json            # GTFS polylines + stops

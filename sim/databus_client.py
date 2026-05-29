@@ -148,6 +148,55 @@ class DatabusClient:
             )
         return UpdateRunResponse.model_validate(resp.json())
 
+    # --- run state (replaces the old Redis poller) -------------------------
+
+    async def get_run_state(self, run_id: str) -> str | None:
+        """GET /api/run/{run_id}/. Return ``run_lifecycle_state`` or None.
+
+        Mirrors the old ``RedisClient.get_run_state`` semantics exactly:
+        404 (run not found) → None. Any other error is logged and also
+        returns None (resilience pattern shared with ``get_trip_terminal_stop``).
+        """
+        data = await self._get_run(run_id)
+        if data is None:
+            return None
+        return data.get("run_lifecycle_state")
+
+    async def get_run_hash(self, run_id: str) -> dict[str, str]:
+        """GET /api/run/{run_id}/. Return the run's full field map, or {}.
+
+        Equivalent to the old Redis ``run:{run_id}`` hash: the response's
+        ``fields`` merged with ``run_lifecycle_state`` so the HTTP control
+        ``/run/{run_id}`` endpoint keeps its response shape. 404/error → {}.
+        """
+        data = await self._get_run(run_id)
+        if data is None:
+            return {}
+        fields: dict[str, str] = dict(data.get("fields") or {})
+        state = data.get("run_lifecycle_state")
+        if state is not None:
+            fields["run_lifecycle_state"] = state
+        return fields
+
+    async def _get_run(self, run_id: str) -> dict[str, Any] | None:
+        """Fetch GET /api/run/{run_id}/ JSON, or None on 404/error."""
+        assert self._client is not None, "DatabusClient must be used as a context manager"
+        try:
+            resp = await self._client.get(f"{self.base_url}/api/run/{run_id}/")
+        except httpx.HTTPError as exc:
+            log.warning("get_run request failed run_id=%s: %s", run_id, exc)
+            return None
+        if resp.status_code == 404:
+            return None
+        if not resp.is_success:
+            log.warning("get_run HTTP %s for run %s", resp.status_code, run_id)
+            return None
+        try:
+            return resp.json()
+        except Exception as exc:  # noqa: BLE001
+            log.warning("get_run bad JSON run_id=%s: %s", run_id, exc)
+            return None
+
     async def get_trip_terminal_stop(self, trip_id: str) -> str | None:
         """Return the terminal stop_id for ``trip_id``, or None if not found.
 

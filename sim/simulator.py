@@ -40,7 +40,6 @@ from .fleet import FleetState, Vehicle
 from .controller import Controller
 from .state_publisher import StatePublisher
 from .databus_client import DatabusClient
-from .redis_client import RedisClient
 from .run_binder import RunBinder
 from .scheduler import Scheduler
 from .http_control import HttpControl
@@ -375,7 +374,7 @@ def _run_async_services(
     schedule_path: Path,
     http_port: int,
 ) -> None:
-    """Boot databus/redis/binder/scheduler/http_control inside their own loop."""
+    """Boot databus/binder/scheduler/http_control inside their own loop."""
     asyncio.run(
         _async_services_main(fleet, state_pub, controller, schedule_path, http_port)
     )
@@ -390,8 +389,8 @@ async def _async_services_main(
 ) -> None:
     import uvicorn
 
-    async with DatabusClient() as databus, RedisClient() as redis:
-        binder = RunBinder(fleet, redis)
+    async with DatabusClient() as databus:
+        binder = RunBinder(fleet, databus)
         scheduler = Scheduler(
             path=schedule_path,
             fleet=fleet,
@@ -410,7 +409,6 @@ async def _async_services_main(
         http = HttpControl(
             fleet=fleet,
             scheduler=scheduler,
-            redis_client=redis,
             binder=binder,
             databus=databus,
         )
@@ -468,7 +466,7 @@ def run(
     state_pub.start()
     controller.start()
 
-    # Wire B1/B2: databus client, redis client, run binder, scheduler, http control.
+    # Wire B1/B2: databus client, run binder, scheduler, http control.
     # Run them in a background thread with its own asyncio loop so the sync
     # publish loop below can keep ticking.
     schedule_path = Path(os.getenv("SCHEDULE_PATH", "/app/schedule.yaml"))

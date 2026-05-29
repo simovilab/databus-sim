@@ -11,12 +11,10 @@ dependencies = [
     "jsonpath-ng>=1.6",
     "watchdog>=5.0",
     "psycopg[binary]>=3.2",
-    "redis>=5.0",
     "gtfs-realtime-bindings>=1.0",
     "pytest>=8.3",
     "pytest-asyncio>=0.24",
     "respx>=0.21",
-    "fakeredis>=2.26",
     "rich>=13.7",
     # keep original simulator dep
     "orjson>=3.11.8",

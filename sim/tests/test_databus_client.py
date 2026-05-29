@@ -181,6 +181,76 @@ async def test_all_valid_events_accepted() -> None:
 
 
 # ---------------------------------------------------------------------------
+# get_run_state / get_run_hash — GET /api/run/{run_id}/
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_get_run_state_200() -> None:
+    respx.get(f"{BASE}/api/run/run-1/").mock(
+        return_value=httpx.Response(
+            200,
+            json={"run_id": "run-1", "run_lifecycle_state": "Confirmed", "fields": {}},
+        )
+    )
+    async with DatabusClient(base_url=BASE) as db:
+        assert await db.get_run_state("run-1") == "Confirmed"
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_get_run_state_404_returns_none() -> None:
+    respx.get(f"{BASE}/api/run/missing/").mock(
+        return_value=httpx.Response(404, json={"detail": "not found"})
+    )
+    async with DatabusClient(base_url=BASE) as db:
+        assert await db.get_run_state("missing") is None
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_get_run_state_500_returns_none() -> None:
+    respx.get(f"{BASE}/api/run/boom/").mock(
+        return_value=httpx.Response(500, text="Internal Server Error")
+    )
+    async with DatabusClient(base_url=BASE) as db:
+        assert await db.get_run_state("boom") is None
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_get_run_hash_200_merges_state_and_fields() -> None:
+    respx.get(f"{BASE}/api/run/run-2/").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "run_id": "run-2",
+                "run_lifecycle_state": "In Progress",
+                "fields": {"vehicle_id": "unit-03", "trip_id": "trip-7"},
+            },
+        )
+    )
+    async with DatabusClient(base_url=BASE) as db:
+        result = await db.get_run_hash("run-2")
+    assert result == {
+        "vehicle_id": "unit-03",
+        "trip_id": "trip-7",
+        "run_lifecycle_state": "In Progress",
+    }
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_get_run_hash_404_returns_empty() -> None:
+    respx.get(f"{BASE}/api/run/missing/").mock(
+        return_value=httpx.Response(404, json={"detail": "not found"})
+    )
+    async with DatabusClient(base_url=BASE) as db:
+        assert await db.get_run_hash("missing") == {}
+
+
+# ---------------------------------------------------------------------------
 # context manager behaviour
 # ---------------------------------------------------------------------------
 
