@@ -79,20 +79,29 @@ Re-run after a database wipe.
 
 ```bash
 uv sync --dev
+cp .env.example .env        # optional — edit ports/hosts to taste
+./scripts/dev.sh            # reads WEB_PORT (and DATABUS_* etc.) from .env
+```
+
+`scripts/dev.sh` sources `.env` and launches a single uvicorn worker on `WEB_PORT`
+(default `8080`). Equivalently, by hand:
+
+```bash
 uv run uvicorn --host 0.0.0.0 --port 8080 sim_project.asgi:application
 ```
 
-Then open **http://localhost:8080**.
+Then open **http://localhost:8080** (or your `WEB_PORT`).
 
 > **Do NOT use `manage.py runserver`** — Django's dev server does not emit the ASGI lifespan protocol, so the tick loop, run-binder, and scheduler will never start.
 
 ### Docker
 
 ```bash
+cp .env.example .env        # optional — Docker reads .env automatically
 docker compose up --build
 ```
 
-Then open **http://localhost:8080**.
+Then open **http://localhost:8080** (or your `WEB_PORT`).
 
 To follow logs:
 ```bash
@@ -103,15 +112,31 @@ docker compose logs -f simulator
 
 ## Configuration
 
-All runtime knobs are environment variables. Set them in a `.env` file at the repo root or pass them to Docker. Every variable has a default that works without a `.env`.
+All runtime knobs are environment variables, read from a **`.env` file at the repo root** in *both* run paths:
+
+- **Docker** — `docker compose` substitutes `${VAR}` from `.env` into `docker-compose.yml`.
+- **Local** — `sim_project/settings.py` loads `.env` via `python-dotenv`, and `scripts/dev.sh` binds uvicorn to `$WEB_PORT`.
+
+A real environment variable always overrides `.env`, and every variable has a default that works without a `.env`. Start from `.env.example` (`cp .env.example .env`). To change the port the whole service runs on, set **`WEB_PORT`** — nothing else.
+
+The ports/hosts you'll usually touch:
 
 | Variable | Default | What it controls |
 |---|---|---|
-| `WEB_PORT` | `8080` | Port uvicorn (and Docker) listens on for UI + API + WebSocket |
-| `MQTT_HOST` | `localhost` | Hostname of the databus telemetry-broker (compose default: `host.docker.internal`) |
-| `MQTT_PORT` | `1883` | Port of the databus telemetry-broker |
+| `WEB_PORT` | `8080` | The one port for UI + REST API + WebSocket (Docker publishes `WEB_PORT:WEB_PORT`; local binds uvicorn to it) |
+| `DATABUS_HOST` | `host.docker.internal` | Databus orchestrator host (use `127.0.0.1` for a local non-Docker run) |
+| `DATABUS_HTTP_PORT` | `8000` | Databus orchestrator REST port |
+| `DATABUS_MQTT_HOST` | `host.docker.internal` | Databus telemetry-broker host |
+| `DATABUS_MQTT_PORT` | `1883` | Databus telemetry-broker (MQTT) port |
+
+All other knobs:
+
+| Variable | Default | What it controls |
+|---|---|---|
+| `MQTT_HOST` | ← `DATABUS_MQTT_HOST`, else `localhost` | Broker host the paho publisher connects to (rarely set directly) |
+| `MQTT_PORT` | ← `DATABUS_MQTT_PORT`, else `1883` | Broker port (rarely set directly) |
 | `MQTT_TOPIC_ROOT` | `transit/vehicle` | MQTT topic prefix for telemetry publishes |
-| `DATABUS_BASE_URL` | `http://localhost:8000` | Databus orchestrator base URL for REST calls and the `/databus/` proxy |
+| `DATABUS_BASE_URL` | ← `http://DATABUS_HOST:DATABUS_HTTP_PORT`, else `http://localhost:8000` | Databus orchestrator base URL for REST + the `/databus/` proxy (rarely set directly) |
 | `SHAPES_PATH` | `simulator_app/data/shapes.json` | Absolute path to GTFS polylines + stops JSON |
 | `SCHEDULE_PATH` | `simulator_app/data/schedule.yaml` | Path to schedule file (bind-mounted in Docker for live edits) |
 | `SIM_TICK_INTERVAL` | `2.0` | Tick loop interval in seconds |
@@ -127,7 +152,7 @@ All runtime knobs are environment variables. Set them in a `.env` file at the re
 | `ALLOWED_HOSTS` | `*` | Django ALLOWED_HOSTS (comma-separated) |
 | `DJANGO_SECRET_KEY` | `dev-insecure-…` | Django secret key — change before any real deployment |
 
-In `docker-compose.yml`, `MQTT_HOST` / `MQTT_PORT` are wired from `DATABUS_MQTT_HOST` / `DATABUS_MQTT_PORT` environment variables, and `DATABUS_BASE_URL` is built from `DATABUS_HOST` + `DATABUS_HTTP_PORT` — so the compose file accepts those higher-level `.env` vars.
+Both Docker and local runs derive `MQTT_HOST`/`MQTT_PORT` from `DATABUS_MQTT_HOST`/`DATABUS_MQTT_PORT` and build `DATABUS_BASE_URL` from `DATABUS_HOST` + `DATABUS_HTTP_PORT`, so the same `.env` works everywhere — you set the `DATABUS_*` vars, not the low-level ones.
 
 ---
 

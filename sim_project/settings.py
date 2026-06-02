@@ -20,11 +20,19 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
+from dotenv import load_dotenv
+
 # ---------------------------------------------------------------------------
 # Paths
 # ---------------------------------------------------------------------------
 
 BASE_DIR = Path(__file__).resolve().parent.parent
+
+# Load a repo-root .env for local (non-Docker) runs so every os.environ.get()
+# below picks up its values. override=False means real environment variables
+# always win, so this is a no-op under Docker Compose (which injects env vars
+# directly) and when no .env file exists. Copy .env.example → .env to use it.
+load_dotenv(BASE_DIR / ".env", override=False)
 
 # ---------------------------------------------------------------------------
 # Core
@@ -135,13 +143,24 @@ WHITENOISE_USE_FINDERS = True  # serve from app static dirs without collectstati
 # scheduler.py, and databus_client.py originally used.
 # ---------------------------------------------------------------------------
 
-# MQTT (paho → databus telemetry-broker)
-MQTT_HOST: str = os.environ.get("MQTT_HOST", "localhost")
-MQTT_PORT: int = int(os.environ.get("MQTT_PORT", "1883"))
+# MQTT (paho → databus telemetry-broker).
+# The single source of truth in .env is DATABUS_MQTT_HOST/PORT (what compose
+# uses); fall back to those so the SAME .env drives both Docker and local runs.
+# An explicit MQTT_HOST/MQTT_PORT still wins if set.
+MQTT_HOST: str = os.environ.get(
+    "MQTT_HOST", os.environ.get("DATABUS_MQTT_HOST", "localhost")
+)
+MQTT_PORT: int = int(
+    os.environ.get("MQTT_PORT", os.environ.get("DATABUS_MQTT_PORT", "1883"))
+)
 MQTT_TOPIC_ROOT: str = os.environ.get("MQTT_TOPIC_ROOT", "transit/vehicle")
 
-# Databus HTTP REST
-DATABUS_BASE_URL: str = os.environ.get("DATABUS_BASE_URL", "http://localhost:8000")
+# Databus HTTP REST. Prefer an explicit DATABUS_BASE_URL; otherwise build it
+# from DATABUS_HOST/DATABUS_HTTP_PORT (the .env vars compose also uses).
+DATABUS_BASE_URL: str = os.environ.get("DATABUS_BASE_URL") or "http://{}:{}".format(
+    os.environ.get("DATABUS_HOST", "localhost"),
+    os.environ.get("DATABUS_HTTP_PORT", "8000"),
+)
 
 # Data files (shapes, schedule, mappings) — defaults resolve to simulator_app/data/
 SHAPES_PATH: str = os.environ.get(
