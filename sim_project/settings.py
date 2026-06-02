@@ -52,6 +52,9 @@ INSTALLED_APPS = [
 
 MIDDLEWARE = [
     "django.middleware.security.SecurityMiddleware",
+    # WhiteNoise serves static files under uvicorn/ASGI without collectstatic
+    # or a separate nginx step. Must come immediately after SecurityMiddleware.
+    "whitenoise.middleware.WhiteNoiseMiddleware",
     "django.middleware.common.CommonMiddleware",
 ]
 
@@ -118,6 +121,13 @@ REST_FRAMEWORK = {
 
 STATIC_URL = "/static/"
 STATIC_ROOT = BASE_DIR / "staticfiles"
+
+# simulator_app/static/ is the app-level static directory; APP_DIRS=True makes
+# Django's staticfiles finders pick it up automatically. STATICFILES_DIRS is not
+# needed because the directory lives inside the installed app (APP_DIRS).
+# WhiteNoise serves from STATIC_ROOT (after collectstatic) or from the app's
+# static directories directly in development.
+WHITENOISE_USE_FINDERS = True  # serve from app static dirs without collectstatic first
 
 # ---------------------------------------------------------------------------
 # Simulator runtime configuration

@@ -6,4 +6,5 @@ __pycache__/
 .DS_Store
 
 # Local port/host overrides — copy from .env.example
-.env
+.envdb.sqlite3
+staticfiles/

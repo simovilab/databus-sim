@@ -3,14 +3,14 @@
 Path layout (per PLAN §7):
   /sim/          — DRF simulator API (fleet, schedule, control, run, healthz)
   /databus/<path> — httpx reverse proxy to databus REST (avoids CORS)
-  /              — index TemplateView (placeholder until frontend port)
-  /static/       — staticfiles
+  /              — index TemplateView
+  /static/       — served by WhiteNoise middleware (not a URL pattern)
 
 WebSocket routes live in asgi.py (not here), mounted at /ws/.
+Static files are served by WhiteNoiseMiddleware in settings.py — no URL
+pattern needed here; the DEBUG-mode static() fallback is deliberately omitted.
 """
 
-from django.conf import settings
-from django.conf.urls.static import static
 from django.urls import include, path, re_path
 from django.views.generic import TemplateView
 
@@ -26,6 +26,3 @@ urlpatterns = [
     # Index
     path("", TemplateView.as_view(template_name="index.html"), name="index"),
 ]
-
-if settings.DEBUG:
-    urlpatterns += static(settings.STATIC_URL, document_root=settings.STATIC_ROOT)
