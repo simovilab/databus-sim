@@ -6,5 +6,10 @@ __pycache__/
 .DS_Store
 
 # Local port/host overrides — copy from .env.example
-.envdb.sqlite3
+.env
+
+# Django / build / test artifacts
+db.sqlite3
 staticfiles/
+.coverage
+htmlcov/
