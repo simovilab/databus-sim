@@ -55,6 +55,7 @@ services:
       - "${WEB_PORT:-8080}:${WEB_PORT:-8080}"
 
     volumes:
-      # schedule.yaml is bind-mounted so operators can edit it on the host
-      # without rebuilding the image.
-      - ./sim/schedule.yaml:/app/schedule.yaml:ro
+      # schedule.yaml is bind-mounted (read-write) so operators can edit it on
+      # the host without rebuilding AND the Schedule tab's PUT /sim/schedule can
+      # write it back. Source is the canonical data file under simulator_app/.
+      - ./simulator_app/data/schedule.yaml:/app/schedule.yaml

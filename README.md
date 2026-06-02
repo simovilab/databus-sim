@@ -1,90 +1,59 @@
-# simulator
+# SIMOVI Simulator
 
-Self-contained development environment for the SIMOVI vehicle telemetry pipeline. Runs a synthetic fleet of 6 buses on UCR routes (`bUCR_L1`, `bUCR_L2`), publishes GTFS-Realtime MQTT telemetry, drives the databus run lifecycle, and exposes a live map + operator UI in the browser.
+Self-contained Django ASGI development tool that simulates a fleet of 6 buses on UCR routes (`bUCR_L1`, `bUCR_L2`), publishes GTFS-Realtime telemetry, drives the databus run lifecycle, and exposes a live map + operator UI in the browser. Everything runs in **one process**: background tasks (tick loop, run-binder, scheduler) start via the ASGI lifespan protocol alongside the web server.
 
-> The FSM test harness under `sim/harness/` is out of scope for this README. See `sim/README_TESTING.md`.
+> The FSM test harness under `sim/harness/` is out of scope for this README.
 
 ---
 
 ## Architecture
 
-Three docker services in `compose.yml`:
-
-| Service | Image | Role |
-|---|---|---|
-| `simulator` | local `sim/Dockerfile` | Publishes MQTT telemetry, exposes HTTP control on `SIM_HTTP_PORT`, talks to databus |
-| `ws-bridge` | `eclipse-mosquitto:2.0` | MQTT-over-WebSockets bridge on `MQTT_WS_PORT` ↔ databus telemetry-broker on `DATABUS_MQTT_HOST:DATABUS_MQTT_PORT` |
-| `web` | local `web/Dockerfile` (nginx) | Static UI on `WEB_PORT`, reverse-proxies `/sim/` → simulator and `/databus/` → orchestrator |
-| `broker` (standalone only) | `emqx/nanomq:0.24.9-full` | Local MQTT broker, only when running without databus |
-
-Wired mode (default) talks to the **databus** stack on `DATABUS_HOST` / `DATABUS_MQTT_HOST` (default `host.docker.internal`):
-- `DATABUS_HTTP_PORT` (default `8000`) — orchestrator (HTTP: create/update run **and read run-lifecycle state**)
-- `DATABUS_MQTT_PORT` (default `1883`) — telemetry-broker (MQTT)
-
-The simulator reads run-lifecycle state over HTTP (`GET /api/run/{run_id}/`); it has **no Redis dependency** and never touches databus's Redis, keeping the two stacks independent.
-
-**All ports and hosts are configured in a single `.env` file** so the stack can adapt to a databus deployment that uses different ports — see [Configuration](#configuration-ports--hosts) below.
-
----
-
-## Configuration (ports & hosts)
-
-Every port the stack publishes or connects to lives in a single `.env` file at the
-repo root. Copy the template and edit only what differs from your databus setup:
-
-```bash
-cp .env.example .env
-# edit .env, then:
-docker compose up --build
+```
+browser
+  │
+  ├─ WebSocket /ws/fleet/ ─────────────────────────────────┐
+  │  (fleet / schedule / telemetry push)                    │
+  │                                                         │
+  ├─ HTTP /sim/* (DRF REST) ────────────────────────────────┤
+  │  (fleet, schedule, control, run, healthz)               │
+  │                                                         ▼
+  └─ HTTP /databus/* (httpx proxy) ──► Django ASGI process (uvicorn, 1 worker)
+                                          │
+                                          ├── tick_loop()          ─┐
+                                          ├── RunBinder.poll_loop() │ asyncio tasks
+                                          ├── Scheduler.run_loop()  ┘
+                                          │
+                                          ├── paho MQTT/TCP ──► databus telemetry-broker
+                                          │   transit/vehicle/<id>/{position,progression,occupancy}
+                                          │
+                                          └── httpx ──► databus REST
+                                              GET  /api/runs/<id>/state/
+                                              POST /api/create-run/
+                                              POST /api/runs/<id>/update/
 ```
 
-Every value has a default baked into `docker-compose.yml`, so the stack still runs
-with no `.env` for the standard layout. `.env` is git-ignored; commit changes to
-`.env.example` instead.
-
-| Variable | Default | What it controls |
-|---|---|---|
-| `WEB_PORT` | `8080` | Host port for the browser UI |
-| `SIM_HTTP_PORT` | `8081` | Simulator FastAPI control API (host + in-container) |
-| `MQTT_WS_PORT` | `8083` | MQTT-over-WebSockets port the **browser** connects to |
-| `MQTT_TCP_PORT` | `1884` | Bridge plain-MQTT listener (simulator → bridge, in-network) |
-| `DATABUS_HOST` | `host.docker.internal` | Host where the databus orchestrator runs |
-| `DATABUS_HTTP_PORT` | `8000` | databus orchestrator REST port |
-| `DATABUS_MQTT_HOST` | `host.docker.internal` | Host of the databus telemetry broker |
-| `DATABUS_MQTT_PORT` | `1883` | databus telemetry-broker (MQTT) port |
-
-These three files have no native env support and are rendered from `.env` at
-container startup, so you never edit them by hand:
-
-- **mosquitto bridge config** → rendered inline by the `ws-bridge` service `command` in `docker-compose.yml`.
-- **`web/nginx.conf.template`** → rendered to `default.conf` by nginx's `envsubst` entrypoint.
-- **`web/config.js.template`** → rendered to `config.js`, which tells the browser the `MQTT_WS_PORT`.
-
-> The `sim/harness/` test harness reads its own env vars (`DATABUS_BACKEND_URL`,
-> `MQTT_HOST`, `MQTT_PORT`, …) and is independent of this `.env`. See `sim/README_TESTING.md`.
+Single-process invariant: the in-memory `FleetState` and `InMemoryChannelLayer` require **exactly one worker**. See [Operational Notes](#operational-notes).
 
 ---
 
 ## Prerequisites
 
-1. Docker + Docker Compose
-2. The databus stack running:
+1. Docker + Docker Compose (for container mode) **or** Python 3.12 + `uv` (for local dev).
+2. The databus stack running (optional — see [Standalone Mode](#standalone-mode-no-databus)):
    ```bash
    cd ../databus && ./scripts/dev.sh
    ```
-3. GTFS data loaded into databus (only needs to be done once):
+3. GTFS data loaded into databus (only needed once):
    ```bash
    docker compose -f ../databus/compose.dev.yml exec orchestrator \
        uv run python manage.py loaddata gtfs.json
    ```
 
----
+### Seed databus with the simulator fleet
 
-## Seed databus with the simulator's fleet
+**This step is mandatory before creating any runs.** The simulator's roster is hardcoded as `unit-01`…`unit-06` with operator `op-001`. These do not exist in the stock databus fixtures. Without the seed, every `create-run` call returns HTTP 400 `Vehicle not found` or `Operator not found`.
 
-**This step is mandatory.** The simulator's roster is hardcoded (`sim/fleet.py`) as `unit-01`…`unit-06`, and the web UI's "Request Run" modal defaults to operator `op-001`. None of these exist in the stock databus fixtures (which ship with `SJB1234` / `SJB5678` and operators like `1-1234-5678`). Without this seed, every `create-run` call returns HTTP 400 `Vehicle not found` or `Operator not found`.
-
-Run this one-liner once after the databus stack comes up:
+Run once after the databus stack comes up:
 
 ```bash
 docker compose -f ../databus/compose.dev.yml exec orchestrator \
@@ -100,24 +69,65 @@ print('seed ok:', Vehicle.objects.filter(id__startswith='unit-').count(), 'vehic
 "
 ```
 
-You only need to re-run this after a database wipe.
+Re-run after a database wipe.
 
 ---
 
-## Start the simulator
+## Quickstart
 
-From this directory:
+### Local development
 
 ```bash
-docker compose up -d simulator ws-bridge web
+uv sync --dev
+uv run uvicorn --host 0.0.0.0 --port 8080 sim_project.asgi:application
 ```
 
-Then open **http://localhost:8080** for the live map and operator UI.
+Then open **http://localhost:8080**.
+
+> **Do NOT use `manage.py runserver`** — Django's dev server does not emit the ASGI lifespan protocol, so the tick loop, run-binder, and scheduler will never start.
+
+### Docker
+
+```bash
+docker compose up --build
+```
+
+Then open **http://localhost:8080**.
 
 To follow logs:
 ```bash
 docker compose logs -f simulator
 ```
+
+---
+
+## Configuration
+
+All runtime knobs are environment variables. Set them in a `.env` file at the repo root or pass them to Docker. Every variable has a default that works without a `.env`.
+
+| Variable | Default | What it controls |
+|---|---|---|
+| `WEB_PORT` | `8080` | Port uvicorn (and Docker) listens on for UI + API + WebSocket |
+| `MQTT_HOST` | `localhost` | Hostname of the databus telemetry-broker (compose default: `host.docker.internal`) |
+| `MQTT_PORT` | `1883` | Port of the databus telemetry-broker |
+| `MQTT_TOPIC_ROOT` | `transit/vehicle` | MQTT topic prefix for telemetry publishes |
+| `DATABUS_BASE_URL` | `http://localhost:8000` | Databus orchestrator base URL for REST calls and the `/databus/` proxy |
+| `SHAPES_PATH` | `simulator_app/data/shapes.json` | Absolute path to GTFS polylines + stops JSON |
+| `SCHEDULE_PATH` | `simulator_app/data/schedule.yaml` | Path to schedule file (bind-mounted in Docker for live edits) |
+| `SIM_TICK_INTERVAL` | `2.0` | Tick loop interval in seconds |
+| `POST_RUN_IDLE_S` | `30` | Seconds a vehicle keeps transmitting after reaching the terminal stop |
+| `RUN_POLL_INTERVAL_S` | `2.0` | How often RunBinder polls databus for run state |
+| `SCHEDULER_TICK_S` | `1.0` | How often the scheduler checks for entries due to fire |
+| `SIM_ONLY_VEHICLES` | `` (all) | Comma-separated vehicle IDs to simulate; others are skipped |
+| `SIM_STOP_VEHICLES` | `` (none) | Comma-separated vehicle IDs to silence at startup |
+| `SIM_RANDOM_DROP_RATE` | `0` | Integer 0–100: percentage of ticks to randomly drop (packet-loss simulation) |
+| `SIM_STOP_ALL_AFTER` | `0` | Freeze all vehicles after N ticks (0 = never) |
+| `DEBUG` | `true` | Django DEBUG mode |
+| `LOG_LEVEL` | `INFO` | Root logger level (`DEBUG`, `INFO`, `WARNING`, …) |
+| `ALLOWED_HOSTS` | `*` | Django ALLOWED_HOSTS (comma-separated) |
+| `DJANGO_SECRET_KEY` | `dev-insecure-…` | Django secret key — change before any real deployment |
+
+In `docker-compose.yml`, `MQTT_HOST` / `MQTT_PORT` are wired from `DATABUS_MQTT_HOST` / `DATABUS_MQTT_PORT` environment variables, and `DATABUS_BASE_URL` is built from `DATABUS_HOST` + `DATABUS_HTTP_PORT` — so the compose file accepts those higher-level `.env` vars.
 
 ---
 
@@ -127,341 +137,349 @@ Four tabs at `http://localhost:8080`:
 
 | Tab | What it does |
 |---|---|
-| **Fleet** | Live map of all 6 vehicles, their MQTT telemetry, bound run, and lifecycle state. |
-| **Runs** | Active/recent runs with cancel / interrupt / short-turn buttons. Polls `GET /sim/run/{id}` every 2 s. |
-| **Schedule** | Edit `sim/schedule.yaml` — schedule runs to fire automatically at `start_time`. |
-| **Operator** | "Request Run" button → opens a modal that POSTs `/api/create-run/` to databus on demand. |
+| **Fleet** | Live map of all 6 vehicles, their telemetry, bound run, and lifecycle state |
+| **Schedule** | View and edit `schedule.yaml` — schedule runs to fire automatically at `start_time` |
+| **Operator** | "Request Run" modal — create a run on demand via the databus REST API |
+| **Runs** | Active/recent runs with cancel / interrupt / short-turn buttons |
 
 ### Typical operator-driven flow
 
 1. Open **Operator** → **Request Run** → pick a vehicle, trip (loaded from databus), and operator ID.
 2. The run is created in databus (state: `Initialized`).
-3. Click the run in the **Runs** tab → POST `run_confirmed_by_operator` via `/api/update-run/`.
-4. Databus transitions `Initialized → Confirmed`. The simulator's `RunBinder` notices by polling `GET /api/run/{run_id}/` and:
+3. Click the run in the **Runs** tab → POST `run_confirmed_by_operator` to databus via the `/databus/` proxy.
+4. Databus transitions `Initialized → Confirmed`. The simulator's `RunBinder` notices by polling `GET /api/runs/{run_id}/state/` and:
    - binds the vehicle to the run,
    - resets `progress_m = 0`,
    - sets `transmitting = True`.
-5. As MQTT pings arrive at the databus realtime-engine, the run advances `Confirmed → Tracking → InProgress`.
+5. As MQTT pings arrive at the databus realtime-engine, the run advances `Confirmed → Tracking → In Progress`.
 6. To end: click **Cancel** / **Interrupt** / **Short-turn** in the Runs tab. The terminal state is picked up on the next poll and the simulator unbinds the vehicle.
 
 ### Scheduled flow
 
-Edit `sim/schedule.yaml` (bind-mounted into the container — host edits show up live):
+Edit `simulator_app/data/schedule.yaml` (bind-mounted as `/app/schedule.yaml` in Docker). Then either restart the simulator or hit `POST /sim/schedule/reload` (also exposed as a button in the Schedule tab).
+
+---
+
+## Schedule Format
 
 ```yaml
 defaults:
-  pre_run_idle_s: 30
-  post_run_idle_s: 30
-  auto_confirm_delay_s: 5
+  pre_run_idle_s: 30          # fire create-run this many seconds before start_time
+  post_run_idle_s: 30         # vehicle keeps transmitting this many s after terminal stop
+  auto_confirm_delay_s: 5     # seconds after create-run to auto-POST run_confirmed (if auto_confirm)
+
 runs:
-  - id: "sched-001"
-    vehicle_id: "unit-01"
-    operator_id: "op-001"
+  - id: "sched-001"                          # unique string; required
+    vehicle_id: "unit-01"                    # must be in the fleet roster
+    operator_id: "op-001"                    # must exist in databus
     route_id: "bUCR_L1"
-    trip_id: "trip-bUCR_L1-0001"      # must exist in databus GTFS
-    direction_id: 0
-    shape_id: "hacia_artes"            # must exist in sim/shapes.json
-    schedule_relationship: "SCHEDULED"
-    start_time: "2026-05-19T16:00:00-06:00"
-    auto_confirm: true
-    auto_start_motion_after_s: 10
+    trip_id: "trip-bUCR_L1-0001"            # must exist in databus GTFS
+    direction_id: 0                          # 0 or 1
+    shape_id: "hacia_artes"                  # must exist in shapes.json
+    schedule_relationship: "SCHEDULED"       # SCHEDULED | ADDED | UNSCHEDULED
+    start_time: "2026-05-19T16:00:00-06:00"  # ISO 8601 WITH timezone — required
+    auto_confirm: true                       # auto-POST run_confirmed_by_operator
+    auto_start_motion_after_s: 10            # start moving N seconds after Confirmed (null to skip)
 ```
 
-Then either restart the simulator or hit `POST /sim/schedule/reload` (also exposed as a button in the Schedule tab).
+**Required fields per entry:** `id`, `vehicle_id`, `operator_id`, `route_id`, `trip_id`, `direction_id`, `shape_id`, `start_time`.
+
+`start_time` **must include a timezone** (e.g. `-06:00`) — entries without a timezone are silently skipped.
 
 ---
 
-## Simulator CLI flags
+## API Reference
 
-Set in `compose.yml` under `services.simulator.command`, or pass when running locally with `uv`:
+### WebSocket — `/ws/fleet/`
 
-```bash
-cd sim && uv sync && uv run python -m sim.simulator [flags]
+Connect once; all realtime data flows over this socket. On connect the server immediately sends the current fleet and schedule snapshots (replicating MQTT retained-message semantics). Control is via HTTP POST — the socket is receive-only.
+
+#### Message types
+
+**`fleet`** — full fleet snapshot, sent on connect and after every tick:
+```json
+{
+  "type": "fleet",
+  "payload": {
+    "vehicles": [
+      {
+        "vehicle_id": "unit-01",
+        "route_id": "bUCR_L1",
+        "transmitting": true,
+        "moving": true,
+        "bound_run_id": "abc123",
+        "bound_trip_id": "trip-bUCR_L1-0001",
+        "lifecycle_state": "In Progress",
+        "progress_m": 412.5
+      }
+    ],
+    "published_at": "2026-05-19T16:00:02+00:00"
+  }
+}
 ```
 
-| Flag | Default | Description |
-|---|---|---|
-| `--interval N` | `2.0` | Tick interval in seconds |
-| `--per-route N` | `3` | Advisory only — fleet is fixed at 6 (3 per route) |
-| `--stop-vehicle ID` | — | Silence a specific vehicle (repeatable) |
-| `--only-vehicle ID` | — | Publish only this vehicle (repeatable) |
-| `--random-drop-rate N` | `0` | Drop N % of frames (simulates packet loss) |
-| `--stop-all-after N` | `0` | Freeze all vehicles after N ticks (simulates outage) |
+**`schedule`** — schedule snapshot, sent on connect and whenever the schedule changes:
+```json
+{
+  "type": "schedule",
+  "payload": {
+    "defaults": {"pre_run_idle_s": 30, "post_run_idle_s": 30, "auto_confirm_delay_s": 5},
+    "runs": [
+      {
+        "id": "sched-001",
+        "vehicle_id": "unit-01",
+        "status": "initialized",
+        "bound_run_id": "abc123"
+      }
+    ],
+    "published_at": "2026-05-19T16:00:01+00:00"
+  }
+}
+```
 
-### Environment variables
+Note: the schedule payload uses the key `runs` (not `entries`). The browser's `ws_client.js` aliases it internally.
 
-These are read by the simulator **process**. Inside the compose stack they are
-wired from `.env` (see [Configuration](#configuration-ports--hosts)); the defaults
-below apply when running the process bare (e.g. `python -m sim.simulator`).
+**`telemetry`** — single-vehicle telemetry leaf, sent each tick:
+```json
+{
+  "type": "telemetry",
+  "vehicle_id": "unit-01",
+  "leaf": "position",
+  "payload": {
+    "timestamp": 1747670402,
+    "latitude": 9.935812,
+    "longitude": -84.051234,
+    "bearing": 287.3,
+    "speed": 7.42,
+    "odometer": 412.5
+  }
+}
+```
 
-| Variable | Default | Purpose |
-|---|---|---|
-| `MQTT_HOST` | `localhost` | MQTT broker host (compose: `ws-bridge`) |
-| `MQTT_PORT` | `1883` | MQTT broker port (compose: `MQTT_TCP_PORT`, `1884`) |
-| `MQTT_TOPIC_ROOT` | `transit/vehicle` | Topic prefix for telemetry |
-| `DATABUS_BASE_URL` | `http://localhost:8000` | Orchestrator HTTP base — create/update run + read run state (compose: built from `DATABUS_HOST`/`DATABUS_HTTP_PORT`) |
-| `SIM_HTTP_PORT` | `8081` | FastAPI control port |
-| `SIM_CORS_ORIGINS` | `http://localhost:8080` | Comma-separated browser origins allowed by CORS (compose: `http://localhost:${WEB_PORT}`) |
-| `SCHEDULE_PATH` | `/app/schedule.yaml` | Path to schedule file (bind-mounted) |
-| `POST_RUN_IDLE_S` | `30` | Seconds a vehicle keeps transmitting after reaching the terminal stop |
-| `RUN_POLL_INTERVAL_S` | `2.0` | How often `RunBinder` polls databus for run state |
+Telemetry `leaf` values: `position`, `progression`, `occupancy`. Their payload shapes are byte-identical to the MQTT topics (`transit/vehicle/<id>/<leaf>`) that databus's realtime-engine consumes.
 
----
+### HTTP REST — `/sim/*`
 
-## HTTP control API (`:8081`, proxied at `/sim/`)
+All endpoints return JSON. No authentication required (`AllowAny`).
 
 | Method | Path | Description |
 |---|---|---|
-| `GET` | `/healthz` | Liveness probe |
-| `GET` | `/fleet` | Snapshot of all 6 vehicles + bindings (see `sim/CONTRACTS.md` §1.2) |
-| `GET` | `/schedule` | Current `schedule.yaml` + per-entry status |
-| `PUT` | `/schedule` | Overwrite `schedule.yaml` (atomic write + reload) |
-| `POST` | `/schedule/reload` | Re-read `schedule.yaml` from disk |
-| `GET` | `/run/{run_id}` | Pull-through read of databus run state (`GET /api/run/{run_id}/`) |
+| `GET` | `/sim/healthz` | Liveness probe; returns `{"ok": true}` |
+| `GET` | `/sim/fleet` | Full fleet snapshot |
+| `GET` | `/sim/schedule` | Current schedule + per-entry status |
+| `PUT` | `/sim/schedule` | Overwrite `schedule.yaml` (atomic write + reload); body: schedule document |
+| `POST` | `/sim/schedule/reload` | Re-read `schedule.yaml` from disk |
+| `GET` | `/sim/run/<run_id>` | Pull-through read of databus run state (`GET /api/runs/<id>/state/`) |
+| `POST` | `/sim/runs/track` | Register a run with RunBinder; body: `{vehicle_id, trip_id, run_id, shape_id}` |
+| `POST` | `/sim/control/<vehicle_id>/<knob>` | Per-vehicle control action (see table below) |
+| `POST` | `/sim/control/global/<knob>` | Global control action (see table below) |
+
+#### Per-vehicle control knobs (`POST /sim/control/<vehicle_id>/<knob>`)
+
+| Knob | Body | Effect |
+|---|---|---|
+| `transmit` | `{"on": true\|false}` | Enable/disable telemetry publishing for this vehicle |
+| `moving` | `{"on": true\|false}` | Start/stop vehicle motion |
+| `speed` | `{"value": 8.5}` or `{"value": null}` | Override speed in m/s; `null` clears the override |
+| `occupancy` | `{"value": 42}` or `{"value": null}` | Override occupancy percentage (0–100); `null` clears |
+| `dwell` | `{"stop_id": "stop-X", "ticks": 3}` | Force a dwell at stop for N ticks |
+| `jump_to_terminal` | `{}` | Snap vehicle to ~1 m before its terminal stop |
+| `set_progress` | `{"stop_id": "stop-X"}` | Jump vehicle to the shape point nearest to `stop_id` |
+| `inject_fault` | `{"kind": "stale_ts"\|"out_of_bounds"\|"malformed", "duration_ticks": 5}` | Inject a telemetry fault for N ticks |
+
+#### Global control knobs (`POST /sim/control/global/<knob>`)
+
+| Knob | Body | Effect |
+|---|---|---|
+| `start_run` | `{"vehicle_id": "unit-01"}` | Set the named vehicle to `moving=True` |
+| `reload_schedule` | `{}` | Reload `schedule.yaml` from disk |
+
+### Databus proxy — `/databus/<path>`
+
+All methods (GET, POST, PUT, PATCH, DELETE) are forwarded to `DATABUS_BASE_URL/<path>`, preserving query string, body, and status code. This avoids CORS issues because the browser hits the same origin.
+
+**Security note:** Do not expose `WEB_PORT` to an untrusted network. The proxy is unauthenticated — it would otherwise be an open gateway to the databus write API.
 
 ---
 
-## MQTT topics
+## Operational Notes
 
-Published every tick (QoS 0) on `transit/vehicle/<vehicle_id>/…`:
+### Single-worker invariant
 
-| Leaf | Payload |
-|---|---|
-| `position` | `timestamp, latitude, longitude, bearing, speed, odometer` |
-| `progression` | `timestamp, current_stop_sequence, stop_id, current_status, congestion_level, route_id, shape_id` |
-| `occupancy` | `timestamp, occupancy_status, occupancy_percentage` |
+The simulator uses `InMemoryChannelLayer` and an in-memory `FleetState`. Both require **exactly one process**:
 
-Internal sim state topics on `sim/state/{fleet,schedule}` (read by the web UI).
-Operator control topics on `sim/control/{transmit,move,speed,...}` (written by the web UI).
+- Run `uvicorn` without `--workers` (the default is 1).
+- Do NOT run `docker compose up --scale simulator=N` with N > 1.
+- Do NOT front uvicorn with gunicorn multi-worker or any other multi-process setup.
+
+Multiple workers would split-brain the fleet state and deafen the channel layer — the map would freeze and control POSTs would be silently ignored.
+
+If you ever need to scale, switch to a Redis channel layer and external fleet state.
+
+### ASGI server: uvicorn, not daphne
+
+The `CMD` in `Dockerfile` uses `uvicorn`. `daphne 4.x` does not emit the ASGI lifespan protocol, so background tasks never start under daphne. `daphne` is kept as a dev dependency only because `channels.testing.WebsocketCommunicator` imports it at module load.
+
+### Auth: AllowAny
+
+All DRF endpoints use `AllowAny`. This is intentional for a local/dev tool. Keep `WEB_PORT` on a trusted network.
 
 ---
 
-## Standalone mode (no databus)
+## Standalone Mode (no databus)
 
-For map visualization only — no run lifecycle, no databus, no Redis:
+The UI, map, and WebSocket work without databus. Paho MQTT publishes fail harmlessly with a warning log. RunBinder and Scheduler log connection errors but do not crash.
 
 ```bash
-docker compose --profile standalone up broker simulator web
+uv run uvicorn --host 0.0.0.0 --port 8080 sim_project.asgi:application
+# or:
+docker compose up --build
 ```
 
-Brings up a local NanoMQ broker on `:1883` / `:8083`. The simulator will publish telemetry but `RunBinder` and `Scheduler` will log connection errors against databus, which can be ignored.
+No local MQTT broker is needed — the old `broker` (NanoMQ) service is gone.
+
+---
+
+## Testing
+
+Run the full suite (94 tests):
+```bash
+uv run pytest
+```
+
+With coverage:
+```bash
+uv run pytest --cov=simulator_app --cov-report=term-missing
+```
+
+Tests live in:
+- `simulator_app/tests/` — unit and integration tests for all app modules
+- `tests/` — boot-level smoke tests (`/sim/healthz`, ASGI import)
+
+---
+
+## E2E Verification Checklist (manual, requires live databus)
+
+After starting the stack with a seeded databus:
+
+- [ ] Open `http://localhost:8080` — map renders, Fleet tab shows 6 vehicles.
+- [ ] Open Operator tab → Request Run → select a vehicle, trip, operator → Submit.
+- [ ] Run appears in the Runs tab with state `Initialized`.
+- [ ] Click **Confirm** — run transitions to `Confirmed`.
+- [ ] Within 2–4 s, the vehicle on the map starts moving.
+- [ ] Telemetry appears at the databus broker:
+  ```bash
+  docker run --rm -it --network=host eclipse-mosquitto:2.0 \
+    mosquitto_sub -h localhost -p 1883 -t 'transit/vehicle/unit-01/+' -v -C 3
+  ```
+- [ ] Click **Cancel** (or **Interrupt** / **Short-turn**) — vehicle stops transmitting and the run disappears from active bindings.
+- [ ] Edit `schedule.yaml`, add an entry, click **Reload** in the Schedule tab — new entry appears with status `pending`, fires at `start_time`.
 
 ---
 
 ## Troubleshooting
 
 ### `create-run` returns 400 "Vehicle not found" / "Operator not found"
-You skipped the **Seed databus** step above. Run the one-liner.
+You skipped the **Seed databus** step. Run the one-liner under [Prerequisites](#prerequisites).
 
-### A run is stuck in `InProgress` and won't cancel after a databus restart
-Cause: databus restart lost the run's state. The simulator's `RunBinder` keeps the vehicle bound. The cancel button calls databus, but databus no longer has the run.
+### A run is stuck in `In Progress` and won't cancel after a databus restart
+Cause: databus restart lost the run's state. The `RunBinder` will automatically force-unbind after it receives a `404` on `GET /api/runs/{run_id}/state/` — wait ~2–4 s and look for `run_binder.lost … force-unbinding` in the logs.
 
-Fix (already in code as of the `RunBinder._force_unbind` change): wait ~2 s after a databus restart and the simulator will log `run_binder.lost … force-unbinding` and clear the binding automatically — a `404` from `GET /api/run/{run_id}/` is treated exactly as a lost run.
-
-To clean up the browser side too:
+To also clear the browser side:
 ```js
-// DevTools console at http://localhost:8080
+// Browser DevTools console at http://localhost:8080
 localStorage.removeItem('simovi_recentRuns')
 ```
 Then reload.
 
-### The vehicles don't appear on the map
-- Check the simulator logs (`docker compose logs simulator`) for MQTT connection errors.
-- Confirm the ws-bridge is running: `docker compose ps ws-bridge`.
-- In standalone mode, make sure you started `broker` too.
+### Vehicles don't appear on the map
+- Check logs for paho MQTT connection errors: `docker compose logs simulator | grep paho`
+- Vehicles only transmit once their bound run reaches `Confirmed` — check the Runs tab.
+- In standalone mode (no databus), vehicles never receive a `Confirmed` transition and never start transmitting. Use `POST /sim/control/unit-01/transmit` with `{"on": true}` to force transmission.
 
 ### Schedule entries never fire
-- `start_time` must include a timezone (e.g. `…-06:00`).
-- The simulator only ticks the scheduler every `SCHEDULER_TICK_S` (default 1 s) — give it a moment after editing.
+- `start_time` must include a timezone offset (e.g. `"2026-05-19T16:00:00-06:00"`). Entries without a timezone are silently skipped.
+- The scheduler ticks every `SCHEDULER_TICK_S` seconds (default 1 s). Give it a moment after editing.
 
----
+### WebSocket not connecting
+- Confirm uvicorn is running (not `runserver`): `uvicorn` logs appear at startup.
+- Check that `WEB_PORT` matches what you're connecting to.
+- The WebSocket URL is derived from `location` in the browser — no config needed for same-origin.
 
-## Local debugging
+### Run state polling fails / `databus client not ready`
+Databus is not reachable at `DATABUS_BASE_URL`. The simulator degrades gracefully — HTTP control endpoints still work but run/track operations return 503.
 
-Concrete commands for inspecting MQTT traffic, run state, HTTP endpoints, and logs while the stack is up.
-
-### Watch MQTT traffic
-
-Use a throwaway `eclipse-mosquitto` container — no install needed.
-
-```bash
-# All vehicle telemetry, decorated with topic name
-docker run --rm -it --network=host eclipse-mosquitto:2.0 \
-  mosquitto_sub -h localhost -p 1883 -t 'transit/vehicle/+/+' -v
-
-# Single vehicle, single leaf
-docker run --rm -it --network=host eclipse-mosquitto:2.0 \
-  mosquitto_sub -h localhost -p 1883 -t 'transit/vehicle/unit-01/position' -v
-
-# Everything the simulator publishes (telemetry + state + control echo)
-docker run --rm -it --network=host eclipse-mosquitto:2.0 \
-  mosquitto_sub -h localhost -p 1883 -t '#' -v
-
-# Just internal sim state (fleet + schedule snapshots)
-docker run --rm -it --network=host eclipse-mosquitto:2.0 \
-  mosquitto_sub -h localhost -p 1883 -t 'sim/state/+' -v
-```
-
-If telemetry never appears, the simulator either isn't running, is pointed at the wrong broker, or no vehicle has `transmitting=True` yet (vehicles only transmit once their bound run hits `Confirmed`).
-
-### Publish MQTT control commands
-
-Same surface the web UI uses. Useful for testing without touching the browser.
+### Inspecting state directly
 
 ```bash
-# Turn unit-01 transmission on/off
-docker run --rm --network=host eclipse-mosquitto:2.0 \
-  mosquitto_pub -h localhost -p 1883 \
-  -t 'sim/control/unit-01/transmit' -m '{"on": true}'
+# Fleet snapshot
+curl -s http://localhost:8080/sim/fleet | jq
 
-# Start motion (only meaningful after a run is bound)
-docker run --rm --network=host eclipse-mosquitto:2.0 \
-  mosquitto_pub -h localhost -p 1883 \
-  -t 'sim/control/unit-01/moving' -m '{"on": true}'
+# Schedule with status
+curl -s http://localhost:8080/sim/schedule | jq
 
-# Override speed (m/s) — pass null to clear
-docker run --rm --network=host eclipse-mosquitto:2.0 \
-  mosquitto_pub -h localhost -p 1883 \
-  -t 'sim/control/unit-01/speed' -m '{"value": 8.5}'
+# Run state (proxied from databus)
+curl -s http://localhost:8080/sim/run/<run_id> | jq
 
-# Force a fault for N ticks (stale_ts | out_of_bounds | malformed)
-docker run --rm --network=host eclipse-mosquitto:2.0 \
-  mosquitto_pub -h localhost -p 1883 \
-  -t 'sim/control/unit-01/inject_fault' \
-  -m '{"kind": "stale_ts", "duration_ticks": 5}'
-
-# Snap a vehicle to ~1 m before its terminal stop
-docker run --rm --network=host eclipse-mosquitto:2.0 \
-  mosquitto_pub -h localhost -p 1883 \
-  -t 'sim/control/unit-01/jump_to_terminal' -m '{}'
-
-# Tell the simulator to re-read schedule.yaml from disk
-docker run --rm --network=host eclipse-mosquitto:2.0 \
-  mosquitto_pub -h localhost -p 1883 \
-  -t 'sim/control/global/reload_schedule' -m '{}'
-```
-
-Topic surface (full table in `sim/CONTRACTS.md` §1.1):
-`sim/control/<vehicle_id>/{transmit,moving,speed,occupancy,dwell,jump_to_terminal,set_progress,inject_fault}` and
-`sim/control/global/{start_run,reload_schedule}`.
-
-### Inspect run state
-
-The simulator's `RunBinder` polls `GET /api/run/{run_id}/` on databus; hitting
-that endpoint directly tells you exactly what state the binder will see next
-tick. No Redis access required.
-
-```bash
-# Read run state straight from databus (what RunBinder polls)
-curl -s http://localhost:8000/api/run/<run_id>/ | jq
-
-# Just the lifecycle state field
-curl -s http://localhost:8000/api/run/<run_id>/ | jq -r '.run_lifecycle_state'
-
-# Watch state changes in real time (re-prints every 1 s)
-watch -n 1 "curl -s http://localhost:8000/api/run/<run_id>/ | jq -r '.run_lifecycle_state'"
-```
-
-A `404` from `/api/run/<run_id>/` while the UI shows a bound run is the
-"stuck run" scenario — see Troubleshooting above.
-
-### Hit the simulator HTTP control directly
-
-```bash
 # Liveness
-curl -s http://localhost:8081/healthz
+curl -s http://localhost:8080/sim/healthz
 
-# Fleet snapshot (all 6 vehicles + bindings)
-curl -s http://localhost:8081/fleet | jq
+# Databus run state directly (what RunBinder polls)
+curl -s http://localhost:8000/api/runs/<run_id>/state/ | jq -r '.run_lifecycle_state'
 
-# Schedule (with per-entry pending/requested/initialized/failed status)
-curl -s http://localhost:8081/schedule | jq
-
-# Pull-through read of databus run state for one run
-curl -s http://localhost:8081/run/<run_id> | jq
-
-# Force a schedule reload from disk
-curl -s -X POST http://localhost:8081/schedule/reload
+# Force schedule reload
+curl -s -X POST http://localhost:8080/sim/schedule/reload
 ```
-
-### Hit the databus orchestrator directly
-
-```bash
-# List trips known to databus (also drives the Request Run modal dropdown)
-curl -s http://localhost:8000/api/trips/ | jq '.[] | {trip_id, route_id, shape_id, direction_id}'
-
-# Inspect a run's FSM transition history (audit log)
-curl -s http://localhost:8000/api/runs/<run_id>/history/ | jq
-
-# Manually transition a run (same call the UI makes for cancel/interrupt/short-turn)
-curl -s -X POST http://localhost:8000/api/update-run/ \
-  -H 'Content-Type: application/json' \
-  -d '{"run_id": "<run_id>", "event": "cancel_run", "details": {"actor_role": "dispatcher"}}'
-```
-
-### Follow logs
-
-```bash
-# Simulator only
-docker compose logs -f simulator
-
-# Databus realtime-engine (consumes MQTT telemetry, drives the FSM)
-docker compose -f ../databus/compose.dev.yml logs -f realtime-engine
-
-# Databus orchestrator (handles create-run / update-run)
-docker compose -f ../databus/compose.dev.yml logs -f orchestrator
-
-# Everything from databus
-docker compose -f ../databus/compose.dev.yml logs -f
-```
-
-Filter for the binder's state transitions:
-```bash
-docker compose logs simulator 2>&1 | grep run_binder
-```
-
-### Verify the end-to-end pipeline
-
-After a run is `Confirmed`, this trio should all show activity within ~2 s:
-
-```bash
-# 1. Simulator says the vehicle is transmitting:
-curl -s http://localhost:8081/fleet | jq '.vehicles[] | select(.vehicle_id=="unit-01")'
-
-# 2. Telemetry is hitting the broker:
-docker run --rm -it --network=host eclipse-mosquitto:2.0 \
-  mosquitto_sub -h localhost -p 1883 -t 'transit/vehicle/unit-01/+' -v -C 3
-
-# 3. Realtime-engine is advancing run state (what RunBinder polls):
-curl -s http://localhost:8000/api/run/<run_id>/ | jq -r '.run_lifecycle_state'
-```
-
-If (1) is good but (2) is silent, the simulator can't reach the broker — check `MQTT_HOST` and the ws-bridge.
-If (2) is good but (3) doesn't advance past `Confirmed`, the realtime-engine isn't consuming — check its logs.
 
 ---
 
-## Repository layout
+## Repository Layout
 
 ```
-simulator/
-├── docker-compose.yml         # ws-bridge + simulator + web
-├── .env.example               # all ports & hosts (copy to .env)
-├── web/                       # static UI (nginx)
-│   ├── nginx.conf.template    # envsubst → reverse-proxies /sim/ and /databus/
-│   ├── config.js.template     # envsubst → window.SIM_CONFIG (MQTT_WS_PORT)
-│   ├── index.html, app.js, style.css
-│   ├── lib/  modals/  tabs/
-└── sim/
-    ├── simulator.py           # tick loop + MQTT publisher
-    ├── fleet.py               # FleetState + 6-vehicle roster
-    ├── controller.py          # MQTT control subscriber
-    ├── state_publisher.py     # MQTT state publisher
-    ├── databus_client.py      # HTTP client: create-run, update-run, run state
-    ├── run_binder.py          # polls databus run state → drives FleetState
-    ├── scheduler.py           # reads schedule.yaml → fires create-run
-    ├── http_control.py        # FastAPI on :8081
-    ├── shapes.json            # GTFS polylines + stops
-    ├── schedule.yaml          # bind-mounted schedule
-    └── tests/                 # pytest unit tests
+databus-sim/
+├── manage.py
+├── pyproject.toml               # Django, channels, uvicorn, drf, httpx, paho-mqtt, …
+├── Dockerfile                   # single image; CMD: uvicorn sim_project.asgi:application
+├── docker-compose.yml           # ONE service (simulator); no ws-bridge, no nginx, no mosquitto
+├── sim_project/                 # Django project (settings, urls, asgi)
+│   ├── settings.py              # all env vars + defaults; CHANNEL_LAYERS; AllowAny
+│   ├── urls.py                  # /sim/* → api.urls; /databus/* → proxy; / → index
+│   └── asgi.py                  # ProtocolTypeRouter{http, websocket, lifespan}
+├── simulator_app/
+│   ├── apps.py                  # AppConfig (SimulatorAppConfig)
+│   ├── runtime.py               # Runtime singleton; start/stop_runtime(); tick_loop()
+│   ├── domain/
+│   │   ├── fleet.py             # FleetState, Vehicle dataclass, 6-vehicle roster
+│   │   ├── kinematics.py        # Shape loading, step_vehicle, build_vehicle_payloads (pure)
+│   │   └── control.py           # apply_control / apply_global_control (transport-agnostic)
+│   ├── services/
+│   │   ├── databus_client.py    # async httpx: create-run, update-run, get-run-state
+│   │   ├── run_binder.py        # polls databus run state → drives FleetState
+│   │   └── scheduler.py        # reads schedule.yaml → fires create-run at start_time
+│   ├── realtime/
+│   │   ├── consumers.py         # FleetConsumer (AsyncJsonWebsocketConsumer)
+│   │   ├── broadcast.py         # group_send helpers (200 ms throttle on fleet)
+│   │   └── routing.py           # websocket_urlpatterns: /ws/fleet/
+│   ├── api/
+│   │   ├── views.py             # DRF function-based views for all /sim/* endpoints
+│   │   ├── serializers.py       # ScheduleDocumentSerializer, TrackRunRequestSerializer
+│   │   ├── urls.py              # URL patterns (healthz, fleet, schedule, run, control)
+│   │   └── proxy.py             # async Django view: /databus/* → httpx → databus REST
+│   ├── data/
+│   │   ├── shapes.json          # GTFS polylines + stops (source of truth for kinematics)
+│   │   └── schedule.yaml        # default empty schedule (bind-mounted in Docker)
+│   ├── templates/index.html     # single-page app shell (served by TemplateView)
+│   ├── static/                  # app.js, style.css, lib/, tabs/, modals/
+│   │   ├── ws_client.js         # WebSocket wrapper (replaces MQTT.js)
+│   │   ├── sim_api.js           # fetch wrappers for /sim/* endpoints
+│   │   ├── databus_api.js       # fetch wrappers for /databus/* endpoints
+│   │   ├── tabs/                # fleet.js, schedule.js, operator.js, runs.js
+│   │   └── modals/              # run_request.js, dwell.js, inject_fault.js, …
+│   └── tests/                   # pytest-django unit + integration tests
+├── tests/                       # boot-level smoke tests
+└── sim/                         # LEGACY — superseded by simulator_app/
+    ├── harness/                 # STILL ACTIVE — FSM test harness (out of scope here)
+    └── *.py                     # old FastAPI/MQTT code kept for reference only
 ```
+
+The old `sim/*.py` files (`simulator.py`, `controller.py`, `state_publisher.py`, `http_control.py`, etc.) and `web/` (nginx static) are **superseded legacy** kept only for reference. They are not imported or executed by the Django service. `sim/harness/` is the still-active FSM test harness — see `sim/harness/AGENT_RUNBOOK.md`.
