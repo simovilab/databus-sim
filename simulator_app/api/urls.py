@@ -1,28 +1,33 @@
-"""URL patterns for the simulator API, mounted at /sim/ in sim_project/urls.py.
-
-Phase 1: Only the /sim/healthz smoke-test endpoint is wired.
-
-Phase 5 backend agent: add all routes from PLAN §6.3:
-  GET  /sim/fleet
-  GET  /sim/schedule
-  PUT  /sim/schedule
-  POST /sim/schedule/reload
-  GET  /sim/run/<run_id>
-  POST /sim/runs/track
-  POST /sim/control/<vehicle_id>/<knob>
-  POST /sim/control/global/<knob>
-"""
+"""URL patterns for the simulator API, mounted at /sim/ in sim_project/urls.py."""
 
 from django.urls import path
 
-from .views import healthz_view
+from .views import (
+    control_global_view,
+    control_vehicle_view,
+    fleet_view,
+    healthz_view,
+    run_detail_view,
+    schedule_reload_view,
+    schedule_view,
+    track_run_view,
+)
 
 app_name = "simulator_app"
 
 urlpatterns = [
-    # Health-check — used by the smoke test and compose health-checks.
+    # Health-check
     path("healthz", healthz_view, name="healthz"),
-    # ---------------------------------------------------------------------------
-    # Phase 5: uncomment / add routes as views are implemented.
-    # ---------------------------------------------------------------------------
+    # Fleet
+    path("fleet", fleet_view, name="fleet"),
+    # Schedule
+    path("schedule", schedule_view, name="schedule"),
+    path("schedule/reload", schedule_reload_view, name="schedule-reload"),
+    # Run state
+    path("run/<str:run_id>", run_detail_view, name="run-detail"),
+    # Track run
+    path("runs/track", track_run_view, name="runs-track"),
+    # Control — order matters: "global" before <vehicle_id>
+    path("control/global/<str:knob>", control_global_view, name="control-global"),
+    path("control/<str:vehicle_id>/<str:knob>", control_vehicle_view, name="control-vehicle"),
 ]

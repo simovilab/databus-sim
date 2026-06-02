@@ -1,6 +1,11 @@
 # SIMOVI Simulator — single-process Django ASGI image.
 #
-# Single-worker invariant: CMD uses `daphne` with NO --workers flag.
+# ASGI server is `uvicorn`, NOT daphne: the simulator's background tasks
+# (tick loop, run-binder, scheduler) are started from the ASGI *lifespan*
+# protocol, which daphne 4.x does not emit. uvicorn does. uvicorn[standard]
+# also provides the WebSocket implementation Channels needs.
+#
+# Single-worker invariant: run uvicorn with NO --workers flag (default 1).
 # Do NOT front this container with gunicorn/uvicorn multi-worker; the
 # InMemoryChannelLayer and in-memory FleetState require exactly ONE process.
 # See PLAN §2 and docker-compose.yml for the full rationale.
@@ -31,8 +36,8 @@ RUN uv run python manage.py collectstatic --noinput
 # Default port — override via WEB_PORT env var in docker-compose.yml
 ENV WEB_PORT=8080
 
-# Single daphne worker — no --workers flag, ever. See note at top of file.
-CMD uv run daphne \
-    -b 0.0.0.0 \
-    -p ${WEB_PORT} \
+# Single uvicorn worker — no --workers flag, ever. See note at top of file.
+CMD uv run uvicorn \
+    --host 0.0.0.0 \
+    --port ${WEB_PORT} \
     sim_project.asgi:application

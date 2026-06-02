@@ -1,36 +1,27 @@
 """Runtime singleton and lifespan lifecycle for the SIMOVI simulator.
 
-This module is the PRIMARY SEAM for Phase 2 backend porting.
+start_runtime() wires all services:
+  1. Load shapes from settings.SHAPES_PATH
+  2. Build FleetState; _init_kin each vehicle
+  3. Connect paho MQTT client (loop_start in its own thread, non-blocking)
+  4. Open DatabusClient (httpx)
+  5. Build RunBinder + Scheduler; scheduler.load() (guard failures → empty schedule)
+  6. Wire fleet.on_change → broadcast_fleet (throttled)
+  7. asyncio.create_task() for tick_loop, binder.poll_loop, scheduler.run_loop
+  8. Populate _runtime fields
 
-PHASE 1 (scaffold): start_runtime() and stop_runtime() are stubs — they log and
-return without starting any real tasks. The module-level `_runtime` is populated
-with a bare Runtime instance (all fields None).
+stop_runtime() cancels all tasks, stops paho, closes DatabusClient.
 
-PHASE 2 (backend agent): fill start_runtime() to:
-  1. Load shapes from settings.SHAPES_PATH (or simulator_app/data/shapes.json).
-  2. Build FleetState from shapes/roster.
-  3. Connect paho MQTT client (loop_start() — own thread, non-blocking).
-  4. Open DatabusClient (httpx.AsyncClient).
-  5. Wire RunBinder + Scheduler.
-  6. asyncio.create_task() for:
-       - tick_loop()          (kinematics + paho publish + Channels group_send)
-       - binder.poll_loop()   (HTTP poll databus run state → FleetState)
-       - scheduler.run_loop() (schedule.yaml → create/update run)
-  7. Populate _runtime fields (fleet, scheduler, binder, databus, mqtt, channel_layer).
-
-Fill stop_runtime() to:
-  1. Cancel and await all background tasks.
-  2. paho.loop_stop() / paho.disconnect().
-  3. await databus.close() (httpx client).
-
-See PLAN §6.1 and §5 for the full wiring contract.
+Single-process invariant: exactly ONE daphne worker (see PLAN §2).
 """
 
 from __future__ import annotations
 
 import asyncio
 import logging
+import random
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 
 log = logging.getLogger(__name__)
@@ -44,9 +35,6 @@ log = logging.getLogger(__name__)
 class Runtime:
     """Module-global container for all live simulator objects.
 
-    All fields are Optional so the scaffold boots without any real services.
-    Phase 2 populates these in start_runtime().
-
     Fields:
         fleet        — FleetState singleton (domain/fleet.py)
         scheduler    — Scheduler instance (services/scheduler.py)
@@ -55,6 +43,9 @@ class Runtime:
         mqtt         — paho.mqtt.client.Client (runs in its own thread via loop_start)
         channel_layer — channels.layers.InMemoryChannelLayer (from Django CHANNEL_LAYERS)
         _tasks       — internal list of asyncio.Task objects created at startup
+        _shapes      — shapes dict (keyed by shape_id)
+        _stops       — stops list
+        _mqtt_topic_root — MQTT topic prefix
     """
 
     fleet: Any | None = None
@@ -64,6 +55,9 @@ class Runtime:
     mqtt: Any | None = None
     channel_layer: Any | None = None
     _tasks: list[asyncio.Task[Any]] = field(default_factory=list)
+    _shapes: Any | None = None
+    _stops: Any | None = None
+    _mqtt_topic_root: str = "transit/vehicle"
 
 
 # Module-level singleton — created once; never replaced.
@@ -71,35 +65,134 @@ _runtime: Runtime = Runtime()
 
 
 def get_runtime() -> Runtime:
-    """Return the module-global Runtime instance.
-
-    Views and consumers import this to reach the live fleet/scheduler/binder.
-    Safe to call before start_runtime() — all fields will be None until startup.
-    """
+    """Return the module-global Runtime instance."""
     return _runtime
 
 
 # ---------------------------------------------------------------------------
-# Lifespan hooks — called by sim_project.asgi._LifespanHandler
+# Lifespan hooks
 # ---------------------------------------------------------------------------
 
 
 async def start_runtime() -> None:
     """Start all simulator background services.
 
-    Phase 1 stub: logs only. Phase 2 fills this with real startup logic.
-    Must be safe to call even when databus is absent (log failures, don't raise).
+    Must be safe to call even when databus / MQTT broker is absent
+    (log failures, don't raise).
     """
-    log.info("runtime.start_runtime() called — stub (Phase 1 scaffold, no tasks started).")
-    # Phase 2: populate _runtime fields and create_task() for the three loops.
+    from django.conf import settings
+    from channels.layers import get_channel_layer
+
+    from simulator_app.domain.fleet import FleetState
+    from simulator_app.domain.kinematics import load_shapes, _init_kin
+    from simulator_app.services.databus_client import DatabusClient
+    from simulator_app.services.run_binder import RunBinder
+    from simulator_app.services.scheduler import Scheduler
+    import simulator_app.realtime.broadcast as _broadcast_mod_startup
+
+    log.info("runtime.start_runtime(): loading shapes from %s", settings.SHAPES_PATH)
+
+    # 1. Load shapes
+    try:
+        shapes, stops, _ = load_shapes(Path(settings.SHAPES_PATH))
+    except Exception as exc:
+        log.error("runtime: failed to load shapes: %s", exc)
+        shapes, stops = {}, []
+
+    # 2. Build FleetState and init kinematics
+    fleet = FleetState()
+    stop_vehicles: set[str] = getattr(settings, "SIM_STOP_VEHICLES", set())
+    for v in fleet.all():
+        _init_kin(v)
+        if v.vehicle_id in stop_vehicles:
+            v.transmitting = False
+
+    _runtime.fleet = fleet
+    _runtime._shapes = shapes
+    _runtime._stops = stops
+    _runtime._mqtt_topic_root = settings.MQTT_TOPIC_ROOT
+
+    # 3. Connect paho MQTT (best-effort; broker may be absent)
+    mqtt_client = None
+    try:
+        import paho.mqtt.client as mqtt
+
+        mqtt_client = mqtt.Client(
+            mqtt.CallbackAPIVersion.VERSION2, client_id="ucr-simulator"
+        )
+        mqtt_client.connect(settings.MQTT_HOST, settings.MQTT_PORT, keepalive=30)
+        mqtt_client.loop_start()
+        log.info(
+            "runtime: paho MQTT connected to %s:%d", settings.MQTT_HOST, settings.MQTT_PORT
+        )
+    except Exception as exc:
+        log.warning(
+            "runtime: paho MQTT connection failed (%s) — telemetry publishes will be skipped",
+            exc,
+        )
+        mqtt_client = None
+
+    _runtime.mqtt = mqtt_client
+
+    # 4. Open DatabusClient
+    databus = DatabusClient(base_url=settings.DATABUS_BASE_URL)
+    try:
+        await databus.open()
+        log.info("runtime: DatabusClient opened at %s", settings.DATABUS_BASE_URL)
+    except Exception as exc:
+        log.warning("runtime: DatabusClient open failed: %s", exc)
+
+    _runtime.databus = databus
+
+    # 5. Build RunBinder + Scheduler
+    binder = RunBinder(
+        fleet=fleet,
+        databus=databus,
+        poll_interval_s=settings.RUN_POLL_INTERVAL_S,
+    )
+    _runtime.binder = binder
+
+    schedule_path = Path(settings.SCHEDULE_PATH)
+    scheduler = Scheduler(
+        path=schedule_path,
+        fleet=fleet,
+        databus=databus,
+        binder=binder,
+        tick_s=settings.SCHEDULER_TICK_S,
+    )
+    try:
+        scheduler.load()
+        log.info("runtime: scheduler loaded %d entries", len(scheduler._entries))
+    except Exception as exc:
+        log.warning("runtime: scheduler.load failed (%s) — empty schedule", exc)
+
+    _runtime.scheduler = scheduler
+
+    # 6. Wire fleet.on_change → broadcast_fleet (throttled)
+    def _on_fleet_change() -> None:
+        asyncio.ensure_future(_broadcast_mod_startup.broadcast_fleet(fleet.snapshot()))
+
+    fleet.on_change.append(_on_fleet_change)
+
+    # 7. Wire channel layer
+    _runtime.channel_layer = get_channel_layer()
+
+    # 8. Create background tasks
+    tick_task = asyncio.create_task(tick_loop(), name="tick_loop")
+    binder_task = asyncio.create_task(binder.poll_loop(), name="run_binder")
+    scheduler_task = asyncio.create_task(scheduler.run_loop(), name="scheduler")
+
+    _runtime._tasks = [tick_task, binder_task, scheduler_task]
+
+    log.info(
+        "runtime.start_runtime(): %d vehicles, %.1fs tick — 3 background tasks started",
+        len(fleet.all()),
+        settings.SIM_TICK_INTERVAL,
+    )
 
 
 async def stop_runtime() -> None:
-    """Gracefully shut down all simulator background services.
-
-    Phase 1 stub: cancels any tasks that may have been added to _runtime._tasks,
-    then logs. Phase 2 adds paho.loop_stop() and httpx client close.
-    """
+    """Gracefully shut down all simulator background services."""
     log.info("runtime.stop_runtime() called — cancelling background tasks.")
 
     tasks = _runtime._tasks[:]
@@ -110,8 +203,104 @@ async def stop_runtime() -> None:
     if tasks:
         results = await asyncio.gather(*tasks, return_exceptions=True)
         for result in results:
-            if isinstance(result, Exception) and not isinstance(result, asyncio.CancelledError):
+            if isinstance(result, Exception) and not isinstance(
+                result, asyncio.CancelledError
+            ):
                 log.error("runtime.stop_runtime(): task raised: %s", result)
 
     _runtime._tasks.clear()
+
+    # Stop paho MQTT
+    if _runtime.mqtt is not None:
+        try:
+            _runtime.mqtt.loop_stop()
+            _runtime.mqtt.disconnect()
+            log.info("runtime: paho MQTT stopped and disconnected")
+        except Exception as exc:
+            log.warning("runtime: paho stop/disconnect error: %s", exc)
+        _runtime.mqtt = None
+
+    # Close DatabusClient
+    if _runtime.databus is not None:
+        try:
+            await _runtime.databus.close()
+            log.info("runtime: DatabusClient closed")
+        except Exception as exc:
+            log.warning("runtime: DatabusClient close error: %s", exc)
+        _runtime.databus = None
+
     log.info("runtime.stop_runtime() complete.")
+
+
+# ---------------------------------------------------------------------------
+# Tick loop — async rewrite of sim/simulator.py run()
+# ---------------------------------------------------------------------------
+
+
+async def tick_loop() -> None:
+    """Async tick loop: step vehicles, publish telemetry, push to browser."""
+    from django.conf import settings
+    import orjson
+
+    from simulator_app.domain.kinematics import _get_shape, step_vehicle, build_vehicle_payloads
+    import simulator_app.realtime.broadcast as _broadcast_mod
+
+    interval = settings.SIM_TICK_INTERVAL
+    only_vehicles: set[str] = getattr(settings, "SIM_ONLY_VEHICLES", set())
+    stop_vehicles: set[str] = getattr(settings, "SIM_STOP_VEHICLES", set())
+    drop_rate: int = getattr(settings, "SIM_RANDOM_DROP_RATE", 0)
+    stop_all_after: int = getattr(settings, "SIM_STOP_ALL_AFTER", 0)
+    topic_root: str = _runtime._mqtt_topic_root
+
+    log.info("tick_loop: started (interval=%.1fs)", interval)
+    cycle = 0
+
+    while True:
+        await asyncio.sleep(interval)
+        cycle += 1
+
+        fleet = _runtime.fleet
+        shapes = _runtime._shapes
+        stops = _runtime._stops
+        mqtt = _runtime.mqtt
+
+        if fleet is None or shapes is None:
+            continue
+
+        if stop_all_after and cycle > stop_all_after:
+            continue
+
+        for v in fleet.all():
+            if only_vehicles and v.vehicle_id not in only_vehicles:
+                continue
+            if drop_rate and random.randint(1, 100) <= drop_rate:
+                continue
+
+            shape = _get_shape(v, shapes)
+            step_vehicle(v, interval, shape, stops or [])
+
+            payloads = build_vehicle_payloads(v, shape, stops or [])
+            if payloads is None:
+                continue
+
+            # (a) paho-publish to databus broker (identical topics/payloads as before)
+            if mqtt is not None:
+                for leaf, payload_dict in payloads.items():
+                    topic = f"{topic_root}/{v.vehicle_id}/{leaf}"
+                    try:
+                        mqtt.publish(topic, orjson.dumps(payload_dict), qos=0)
+                    except Exception as exc:
+                        log.debug("tick_loop: paho publish error: %s", exc)
+
+            # (b) push telemetry to browser group via Channels
+            for leaf, payload_dict in payloads.items():
+                await _broadcast_mod.broadcast_telemetry(v.vehicle_id, leaf, payload_dict)
+
+        # Push fleet snapshot to browser after every tick
+        if fleet is not None:
+            await _broadcast_mod.broadcast_fleet(fleet.snapshot())
+
+        if cycle % 10 == 0:
+            log.info(
+                "[cycle %d] ticked %d vehicles", cycle, len(fleet.all()) if fleet else 0
+            )

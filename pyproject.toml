@@ -6,12 +6,16 @@ requires-python = ">=3.12"
 dependencies = [
     "django>=5.0",
     "channels>=4.0",
-    "daphne>=4.0",
+    # uvicorn is the ASGI server (NOT daphne): the simulator's background tasks
+    # start from the ASGI lifespan protocol, which daphne 4.x does not emit.
+    # [standard] also provides the WebSocket implementation Channels relies on.
+    "uvicorn[standard]>=0.48.0",
     "djangorestframework>=3.15",
     "httpx>=0.27",
     "paho-mqtt>=2.1",
     "orjson>=3.11",
     "pyyaml>=6.0",
+    "pydantic>=2.0",
 ]
 
 [project.optional-dependencies]
@@ -19,6 +23,11 @@ dev = [
     "pytest>=8.3",
     "pytest-django>=4.9",
     "pytest-asyncio>=0.24",
+    "pytest-cov>=6.0",
+    "respx>=0.21",
+    # Test-only: channels.testing.WebsocketCommunicator imports daphne at module
+    # load. Not used as the server (uvicorn is) and not in INSTALLED_APPS.
+    "daphne>=4.0",
 ]
 
 [dependency-groups]
@@ -26,12 +35,17 @@ dev = [
     "pytest>=8.3",
     "pytest-django>=4.9",
     "pytest-asyncio>=0.24",
+    "pytest-cov>=6.0",
+    "respx>=0.21",
+    # Test-only: channels.testing.WebsocketCommunicator imports daphne at module
+    # load. Not used as the server (uvicorn is) and not in INSTALLED_APPS.
+    "daphne>=4.0",
 ]
 
 [tool.pytest.ini_options]
 DJANGO_SETTINGS_MODULE = "sim_project.settings"
 asyncio_mode = "auto"
-testpaths = ["tests"]
+testpaths = ["tests", "simulator_app/tests"]
 
 [build-system]
 requires = ["hatchling"]

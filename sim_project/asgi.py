@@ -17,8 +17,12 @@ InMemoryChannelLayer and in-memory FleetState require exactly one process.
 from __future__ import annotations
 
 import logging
+import os
 
-from channels.auth import AuthMiddlewareStack
+# Must be set before any Django machinery (get_asgi_application below) runs, so
+# `uvicorn sim_project.asgi:application` works without an external env var.
+os.environ.setdefault("DJANGO_SETTINGS_MODULE", "sim_project.settings")
+
 from channels.routing import ProtocolTypeRouter, URLRouter
 from django.core.asgi import get_asgi_application
 
@@ -82,9 +86,10 @@ class _LifespanHandler:
 application = ProtocolTypeRouter(
     {
         "http": _django_asgi_app,
-        "websocket": AuthMiddlewareStack(
-            URLRouter(ws_routing.websocket_urlpatterns)
-        ),
+        # No AuthMiddlewareStack: this service uses AllowAny everywhere (PLAN §2, §9).
+        # Using AuthMiddlewareStack would require django.contrib.auth + contenttypes,
+        # which we deliberately exclude from INSTALLED_APPS (DB-free simulator).
+        "websocket": URLRouter(ws_routing.websocket_urlpatterns),
         "lifespan": _LifespanHandler(),
     }
 )

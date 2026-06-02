@@ -3,10 +3,10 @@
 # ─────────────────────────────────────────────────────────────────────────────
 # IMPORTANT: ONE service only. ws-bridge, web, and nginx are gone.
 # The simulator now serves the browser UI, REST API, and WebSocket from a
-# single daphne process on WEB_PORT. See PLAN §4 and §10.
+# single uvicorn process on WEB_PORT. See PLAN §4 and §10.
 # ─────────────────────────────────────────────────────────────────────────────
 #
-# SINGLE-WORKER INVARIANT: daphne runs with NO --workers flag inside the image.
+# SINGLE-WORKER INVARIANT: uvicorn runs with NO --workers flag inside the image.
 # Do NOT scale this service (docker compose up --scale simulator=N) — the
 # InMemoryChannelLayer and in-memory FleetState require exactly ONE process.
 # If you need to scale in future, switch to Redis channel layer + external state.

@@ -3,7 +3,11 @@
 All runtime knobs are read from environment variables with the same defaults
 the original sim/ code used. See PLAN §9 for the full config contract.
 
-Single-process invariant: this service MUST run under exactly ONE daphne worker.
+ASGI server is uvicorn (not daphne): the simulator's background tasks start from
+the ASGI lifespan protocol, which daphne 4.x does not emit. Run locally with
+`uvicorn sim_project.asgi:application` (NOT `manage.py runserver`).
+
+Single-process invariant: this service MUST run under exactly ONE uvicorn worker.
 Scaling to >1 worker would split-brain the in-memory FleetState and deafen the
 InMemoryChannelLayer. See PLAN §2 and docker-compose.yml.
 
@@ -40,8 +44,6 @@ ALLOWED_HOSTS: list[str] = os.environ.get("ALLOWED_HOSTS", "*").split(",")
 # ---------------------------------------------------------------------------
 
 INSTALLED_APPS = [
-    # Daphne must be first so it can handle the ASGI lifespan protocol
-    "daphne",
     "channels",
     "rest_framework",
     "django.contrib.staticfiles",
@@ -131,8 +133,15 @@ MQTT_TOPIC_ROOT: str = os.environ.get("MQTT_TOPIC_ROOT", "transit/vehicle")
 # Databus HTTP REST
 DATABUS_BASE_URL: str = os.environ.get("DATABUS_BASE_URL", "http://localhost:8000")
 
+# Data files (shapes, schedule, mappings) — defaults resolve to simulator_app/data/
+SHAPES_PATH: str = os.environ.get(
+    "SHAPES_PATH", str(BASE_DIR / "simulator_app" / "data" / "shapes.json")
+)
+
 # Schedule file (host-editable, bind-mounted in Docker)
-SCHEDULE_PATH: str = os.environ.get("SCHEDULE_PATH", str(BASE_DIR / "sim" / "schedule.yaml"))
+SCHEDULE_PATH: str = os.environ.get(
+    "SCHEDULE_PATH", str(BASE_DIR / "simulator_app" / "data" / "schedule.yaml")
+)
 
 # Tick / poll intervals (seconds)
 SIM_TICK_INTERVAL: float = float(os.environ.get("SIM_TICK_INTERVAL", "2.0"))
@@ -142,6 +151,16 @@ SCHEDULER_TICK_S: float = float(os.environ.get("SCHEDULER_TICK_S", "1.0"))
 
 # Web port (used by docker-compose CMD; also accepted by settings for reference)
 WEB_PORT: int = int(os.environ.get("WEB_PORT", "8080"))
+
+# Former CLI flags — now read from env at startup
+SIM_ONLY_VEHICLES: set[str] = set(
+    v.strip() for v in os.environ.get("SIM_ONLY_VEHICLES", "").split(",") if v.strip()
+)
+SIM_STOP_VEHICLES: set[str] = set(
+    v.strip() for v in os.environ.get("SIM_STOP_VEHICLES", "").split(",") if v.strip()
+)
+SIM_RANDOM_DROP_RATE: int = int(os.environ.get("SIM_RANDOM_DROP_RATE", "0"))
+SIM_STOP_ALL_AFTER: int = int(os.environ.get("SIM_STOP_ALL_AFTER", "0"))
 
 # ---------------------------------------------------------------------------
 # Logging — structured, sensible defaults for a dev tool
