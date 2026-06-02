@@ -2,8 +2,6 @@
 
 Self-contained Django ASGI development tool that simulates a fleet of 6 buses on UCR routes (`bUCR_L1`, `bUCR_L2`), publishes GTFS-Realtime telemetry, drives the databus run lifecycle, and exposes a live map + operator UI in the browser. Everything runs in **one process**: background tasks (tick loop, run-binder, scheduler) start via the ASGI lifespan protocol alongside the web server.
 
-> The FSM test harness under `sim/harness/` is out of scope for this README.
-
 ---
 
 ## Architecture
@@ -501,10 +499,6 @@ databus-sim/
 │   │   ├── tabs/                # fleet.js, schedule.js, operator.js, runs.js
 │   │   └── modals/              # run_request.js, dwell.js, inject_fault.js, …
 │   └── tests/                   # pytest-django unit + integration tests
-├── tests/                       # boot-level smoke tests
-└── sim/                         # LEGACY — superseded by simulator_app/
-    ├── harness/                 # STILL ACTIVE — FSM test harness (out of scope here)
-    └── *.py                     # old FastAPI/MQTT code kept for reference only
+├── scripts/dev.sh               # local launcher (sources .env, runs uvicorn)
+└── tests/                       # boot-level smoke tests
 ```
-
-The old `sim/*.py` files (`simulator.py`, `controller.py`, `state_publisher.py`, `http_control.py`, etc.) and `web/` (nginx static) are **superseded legacy** kept only for reference. They are not imported or executed by the Django service. `sim/harness/` is the still-active FSM test harness — see `sim/harness/AGENT_RUNBOOK.md`.
