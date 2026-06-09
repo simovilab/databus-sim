@@ -38,11 +38,8 @@ MAX_SPEED = 12.0  # ~43 km/h
 # Auto-dwell at stops: how many ticks a bus pauses when it enters a stop zone.
 STOP_DWELL_TICKS = 3
 
-# Radius within which a vehicle is considered "at" a stop (STOPPED_AT status).
+# Radius within which a vehicle is considered "at" a stop (drives auto-dwell).
 STOP_RADIUS_M = 20.0
-
-# Radius for INCOMING_AT — approaching but not yet at stop.
-INCOMING_AT_RADIUS_M = 50.0
 
 # Seconds a vehicle remains transmitting after reaching the terminal stop.
 # Read from env at import time (same as the original).
@@ -115,16 +112,6 @@ def load_shapes(
     stops: list[dict[str, Any]] = data["stops"]
     routes: list[dict[str, Any]] = data["routes"]
     return shapes, stops, routes
-
-
-def occupancy_status(pct: int) -> str:
-    if pct < 20:
-        return "MANY_SEATS_AVAILABLE"
-    if pct < 50:
-        return "FEW_SEATS_AVAILABLE"
-    if pct < 80:
-        return "STANDING_ROOM_ONLY"
-    return "FULL"
 
 
 def _nearest_stop(
@@ -224,16 +211,13 @@ def build_vehicle_payloads(
     shape: Shape,
     stops: list[dict[str, Any]],
 ) -> dict[str, dict[str, Any]] | None:
-    """Pure payload builder — returns ``{"position":{}, "progression":{}, "occupancy":{}}``
+    """Pure payload builder — returns ``{"position":{}, "occupancy":{}}``
     or ``None`` when ``v.transmitting`` is False.
 
-    The payload bytes are IDENTICAL to what ``sim/simulator.py``'s
-    ``publish_vehicle()`` produced (databus contract).
-
-    Progression status rules:
-    - STOPPED_AT   : effectively stopped (not moving OR dwelling) AND within STOP_RADIUS_M.
-    - INCOMING_AT  : moving AND within INCOMING_AT_RADIUS_M (but outside STOP_RADIUS_M).
-    - IN_TRANSIT_TO: all other cases.
+    Per the databus MQTT contract the sim is a *dumb sensor emitter*: it
+    publishes only what a real vehicle can sense by itself. The ``progression``
+    leaf (map-matched stop status) and the ``occupancy_status`` enum are
+    server-owned — databus recomputes them — so neither is put on the wire.
     """
     if not v.transmitting:
         return None
@@ -275,41 +259,8 @@ def build_vehicle_payloads(
     if active_fault and fault == "malformed":
         position.pop("speed", None)
 
-    # Progression payload.
-    ns, dist = _nearest_stop(stops, lat, lon)
-    at_terminal = (
-        v.bound_shape_id is not None
-        and v.terminal_stop_id is not None
-        and v.progress_m >= shape.total_dist_m - 1.0
-    )
-    if effectively_stopped and (at_terminal or (ns and dist < STOP_RADIUS_M)):
-        status = "STOPPED_AT"
-    elif (not effectively_stopped) and ns and dist < INCOMING_AT_RADIUS_M:
-        status = "INCOMING_AT"
-    else:
-        status = "IN_TRANSIT_TO"
-
-    shape_id = v.bound_shape_id or v.default_shape_id
-    # When at the GTFS terminal of the bound trip, force-publish the cached
-    # terminal_stop_id so databus's is_at_terminal_stop guard can match.
-    if at_terminal and status == "STOPPED_AT":
-        stop_id_field = v.terminal_stop_id
-    elif ns and status in ("STOPPED_AT", "INCOMING_AT"):
-        stop_id_field = ns["stop_id"]
-    else:
-        stop_id_field = ""
-
-    progression: dict[str, Any] = {
-        "timestamp": ts,
-        "current_stop_sequence": kin.get("stop_sequence", 1),
-        "stop_id": stop_id_field,
-        "current_status": status,
-        "congestion_level": "RUNNING_SMOOTHLY",
-        "route_id": v.route_id,
-        "shape_id": shape_id,
-    }
-
-    # Occupancy payload.
+    # Occupancy payload. Raw measurement only — databus recomputes the
+    # ``occupancy_status`` enum server-side and discards any value the edge sends.
     occ_pct = (
         v.occupancy_override
         if v.occupancy_override is not None
@@ -317,12 +268,10 @@ def build_vehicle_payloads(
     )
     occupancy: dict[str, Any] = {
         "timestamp": ts,
-        "occupancy_status": occupancy_status(occ_pct),
         "occupancy_percentage": occ_pct,
     }
 
     return {
         "position": position,
-        "progression": progression,
         "occupancy": occupancy,
     }

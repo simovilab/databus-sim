@@ -30,7 +30,7 @@ def _make_transmitting_fleet() -> FleetState:
 @pytest.mark.asyncio
 @pytest.mark.django_db
 async def test_tick_loop_publishes_to_paho_and_broadcasts() -> None:
-    """One tick should paho-publish 3 leafs and call broadcast_telemetry 3 times."""
+    """One tick should paho-publish the position/occupancy leafs (no progression)."""
     import simulator_app.realtime.broadcast as broadcast_mod
     from simulator_app import runtime as rt_mod
 
@@ -79,12 +79,13 @@ async def test_tick_loop_publishes_to_paho_and_broadcasts() -> None:
         broadcast_mod.broadcast_telemetry = original_telemetry  # type: ignore[assignment]
         broadcast_mod.broadcast_fleet = original_fleet  # type: ignore[assignment]
 
-    # paho.publish should have been called for position/progression/occupancy
+    # paho.publish should have been called for position/occupancy only.
     assert mock_mqtt.publish.called
     topics_published = [c.args[0] for c in mock_mqtt.publish.call_args_list]
     assert any("position" in t for t in topics_published)
-    assert any("progression" in t for t in topics_published)
     assert any("occupancy" in t for t in topics_published)
+    # progression is server-owned and must not be published.
+    assert not any("progression" in t for t in topics_published)
 
 
 @pytest.mark.asyncio

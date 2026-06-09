@@ -22,7 +22,7 @@ browser
                                           ├── Scheduler.run_loop()  ┘
                                           │
                                           ├── paho MQTT/TCP ──► databus telemetry-broker
-                                          │   transit/vehicle/<id>/{position,progression,occupancy}
+                                          │   transit/vehicle/<id>/{position,occupancy}
                                           │
                                           └── httpx ──► databus REST
                                               GET  /api/runs/<id>/state/
@@ -279,7 +279,7 @@ Note: the schedule payload uses the key `runs` (not `entries`). The browser's `w
 }
 ```
 
-Telemetry `leaf` values: `position`, `progression`, `occupancy`. Their payload shapes are byte-identical to the MQTT topics (`transit/vehicle/<id>/<leaf>`) that databus's realtime-engine consumes.
+Telemetry `leaf` values: `position`, `occupancy`. Their payload shapes are byte-identical to the MQTT topics (`transit/vehicle/<id>/<leaf>`) that databus's realtime-engine consumes. (databus no longer subscribes to `progression`, and recomputes the `occupancy_status` enum server-side, so the sim sends neither.)
 
 ### HTTP REST — `/sim/*`
 

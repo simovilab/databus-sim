@@ -23,7 +23,7 @@ uvicorn (1 worker, no --workers)
     └── asyncio.Task: Scheduler.run_loop()     (services/scheduler.py)
          │
          ├── paho MQTT/TCP → databus telemetry-broker
-         │   transit/vehicle/<id>/{position,progression,occupancy}
+         │   transit/vehicle/<id>/{position,occupancy}
          └── httpx → databus REST
              GET  /api/runs/<id>/state/
              POST /api/create-run/
@@ -88,7 +88,7 @@ The most databus-critical module. **Telemetry payload shapes must stay byte-iden
 | `_init_kin(v)` | Populates `v._kin` with initial scratch values (idempotent) |
 | `_get_shape(v, shapes)` | Resolves `v.bound_shape_id` or `v.default_shape_id` |
 | `step_vehicle(v, dt, shape, stops)` | Advances kinematics: dwell, idle, speed, progress, terminal clamp, auto-dwell |
-| `build_vehicle_payloads(v, shape, stops)` | **The telemetry contract.** Returns `{"position": {…}, "progression": {…}, "occupancy": {…}}` or `None` if not transmitting. Payload fields: see [telemetry payload fields](#telemetry-payload-fields) |
+| `build_vehicle_payloads(v, shape, stops)` | **The telemetry contract.** Returns `{"position": {…}, "occupancy": {…}}` or `None` if not transmitting. Payload fields: see [telemetry payload fields](#telemetry-payload-fields) |
 | `Shape` | Dataclass: `shape_id`, `points: list[(lat, lon, dist_km)]`, `total_dist_m` |
 
 #### `domain/control.py` — Add a control knob here
@@ -221,8 +221,12 @@ Set `SIM_TICK_INTERVAL` env var (float, seconds). The `tick_loop()` reads it onc
 
 Current payload fields:
 - `position`: `timestamp, latitude, longitude, bearing, speed, odometer`
-- `progression`: `timestamp, current_stop_sequence, stop_id, current_status, congestion_level, route_id, shape_id`
-- `occupancy`: `timestamp, occupancy_status, occupancy_percentage`
+- `occupancy`: `timestamp, occupancy_percentage`
+
+> The sim is a *dumb sensor emitter*: it publishes only what a real vehicle can
+> sense by itself. The `progression` leaf (map-matched stop status) and the
+> `occupancy_status` enum are server-owned — databus recomputes them and ignores
+> anything the edge sends — so neither goes on the wire.
 
 ### Add a background task
 
@@ -324,26 +328,20 @@ Reference for the three MQTT leaves published to `transit/vehicle/<id>/<leaf>` a
 }
 ```
 
-### `progression`
-```json
-{
-  "timestamp": 1747670402,
-  "current_stop_sequence": 3,
-  "stop_id": "stop-artes-01",
-  "current_status": "IN_TRANSIT_TO",  // STOPPED_AT | INCOMING_AT | IN_TRANSIT_TO
-  "congestion_level": "RUNNING_SMOOTHLY",
-  "route_id": "bUCR_L1",
-  "shape_id": "hacia_artes"
-}
-```
-
 ### `occupancy`
 ```json
 {
   "timestamp": 1747670402,
-  "occupancy_status": "FEW_SEATS_AVAILABLE",  // MANY_SEATS_AVAILABLE | FEW_SEATS_AVAILABLE | STANDING_ROOM_ONLY | FULL
   "occupancy_percentage": 42
 }
 ```
+
+`occupancy_status` is **not** sent: databus recomputes the GTFS-RT enum from
+`occupancy_percentage` server-side and discards any value the edge supplies.
+
+> **Removed: `progression`.** databus no longer subscribes to
+> `transit/vehicle/+/progression`; stop status (`current_status`/`stop_id`/
+> `current_stop_sequence`) is now computed server-side. The sim does not publish
+> this leaf.
 
 These shapes are asserted in `simulator_app/tests/test_kinematics.py`. Do not change them without updating both the test and coordinating with the databus team.

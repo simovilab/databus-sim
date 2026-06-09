@@ -65,15 +65,26 @@ def test_no_payload_when_not_transmitting():
 # ---------------------------------------------------------------------------
 
 
-def test_payload_has_three_leaves():
-    """Transmitting vehicle returns position, progression, occupancy."""
+def test_payload_has_two_leaves():
+    """Transmitting vehicle returns only position and occupancy (no progression)."""
     shape = _make_shape()
     v = _fresh_vehicle()
     v.transmitting = True
     v.moving = True
     payloads = build_vehicle_payloads(v, shape, [])
     assert payloads is not None
-    assert set(payloads.keys()) == {"position", "progression", "occupancy"}
+    assert set(payloads.keys()) == {"position", "occupancy"}
+
+
+def test_progression_leaf_not_emitted():
+    """The server-owned 'progression' leaf must never be published."""
+    shape = _make_shape()
+    stop = _make_stop("s01", lat=9.9, lon=-84.0)
+    v = _fresh_vehicle()
+    v.transmitting = True
+    v.moving = True
+    payloads = build_vehicle_payloads(v, shape, [stop])
+    assert "progression" not in payloads
 
 
 def test_position_has_required_fields():
@@ -123,34 +134,39 @@ def test_speed_zero_when_dwelling():
 
 
 # ---------------------------------------------------------------------------
-# Progression status
+# Occupancy contract (raw measurement only — no server-owned enum)
 # ---------------------------------------------------------------------------
 
 
-def test_stopped_at_when_dwelling_near_stop():
+def test_occupancy_has_percentage():
     shape = _make_shape()
-    stop = _make_stop("s01", lat=9.9, lon=-84.0)
     v = _fresh_vehicle()
     v.transmitting = True
     v.moving = True
-    v.progress_m = 0.0
-    v._kin["dwell_remaining"] = 3
-    v._kin["speed"] = 8.0
-    payloads = build_vehicle_payloads(v, shape, [stop])
-    prog = payloads["progression"]
-    assert prog["current_status"] == "STOPPED_AT"
-    assert prog["stop_id"] == "s01"
+    v._kin["occupancy_pct"] = 42
+    payloads = build_vehicle_payloads(v, shape, [])
+    occ = payloads["occupancy"]
+    assert occ["occupancy_percentage"] == 42
 
 
-def test_stopped_at_when_not_moving_near_stop():
+def test_occupancy_status_not_on_wire():
+    """occupancy_status is server-owned; the edge must not send it."""
     shape = _make_shape()
-    stop = _make_stop("s01", lat=9.9, lon=-84.0)
     v = _fresh_vehicle()
     v.transmitting = True
-    v.moving = False
-    v.progress_m = 0.0
-    payloads = build_vehicle_payloads(v, shape, [stop])
-    assert payloads["progression"]["current_status"] == "STOPPED_AT"
+    v.moving = True
+    payloads = build_vehicle_payloads(v, shape, [])
+    assert "occupancy_status" not in payloads["occupancy"]
+
+
+def test_occupancy_override_reflected_in_payload():
+    shape = _make_shape()
+    v = _fresh_vehicle()
+    v.transmitting = True
+    v.moving = True
+    v.occupancy_override = 90
+    payloads = build_vehicle_payloads(v, shape, [])
+    assert payloads["occupancy"]["occupancy_percentage"] == 90
 
 
 def test_no_data_leaf_in_topics():
