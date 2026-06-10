@@ -146,3 +146,81 @@ async def test_tick_loop_non_transmitting_vehicle_produces_no_payloads() -> None
 
     assert broadcast_calls == []
     assert not mock_mqtt.publish.called
+
+
+@pytest.mark.asyncio
+@pytest.mark.django_db
+async def test_progression_broadcast_over_channels_not_mqtt() -> None:
+    """Progression leaf must be broadcast over Channels, never published to MQTT."""
+    import json
+    from django.conf import settings as dj_settings
+    import simulator_app.realtime.broadcast as broadcast_mod
+    from simulator_app import runtime as rt_mod
+    from simulator_app.domain.progression.shapes import build_route_geometry
+
+    fleet = _make_transmitting_fleet()
+    shapes_path = Path(dj_settings.SHAPES_PATH)
+    shapes, stops, routes = load_shapes(shapes_path)
+
+    # Build a real _progression_geom so at least one shape has stop dicts.
+    raw = json.loads(shapes_path.read_text())
+    prog_geom: dict[str, list] = {}
+    for route in routes:
+        g = build_route_geometry(route, raw["shapes"], raw["stops"])
+        for s in g["shapes"]:
+            prog_geom[s["shape_id"]] = s["stops"]
+
+    mock_mqtt = MagicMock()
+    rt_mod._runtime.fleet = fleet
+    rt_mod._runtime._shapes = shapes
+    rt_mod._runtime._stops = stops
+    rt_mod._runtime._mqtt_topic_root = "transit/vehicle"
+    rt_mod._runtime.mqtt = mock_mqtt
+    rt_mod._runtime._progression_geom = prog_geom
+
+    broadcast_calls: list[tuple[str, str, dict]] = []
+
+    async def fake_broadcast_telemetry(vid: str, leaf: str, data: dict[str, Any]) -> None:
+        broadcast_calls.append((vid, leaf, data))
+
+    async def fake_broadcast_fleet(snap: Any) -> None:
+        pass
+
+    original_telemetry = broadcast_mod.broadcast_telemetry
+    original_fleet = broadcast_mod.broadcast_fleet
+    broadcast_mod.broadcast_telemetry = fake_broadcast_telemetry  # type: ignore[assignment]
+    broadcast_mod.broadcast_fleet = fake_broadcast_fleet  # type: ignore[assignment]
+
+    try:
+        with (
+            patch.object(django.conf.settings, "SIM_TICK_INTERVAL", 0.05),
+            patch.object(django.conf.settings, "SIM_ONLY_VEHICLES", set()),
+            patch.object(django.conf.settings, "SIM_STOP_VEHICLES", set()),
+            patch.object(django.conf.settings, "SIM_RANDOM_DROP_RATE", 0),
+            patch.object(django.conf.settings, "SIM_STOP_ALL_AFTER", 0),
+        ):
+            task = asyncio.create_task(rt_mod.tick_loop())
+            await asyncio.sleep(0.15)  # ~3 ticks at 0.05 s
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+    finally:
+        broadcast_mod.broadcast_telemetry = original_telemetry  # type: ignore[assignment]
+        broadcast_mod.broadcast_fleet = original_fleet  # type: ignore[assignment]
+
+    # 1. broadcast_telemetry must have been called with leaf="progression".
+    progression_broadcasts = [(vid, leaf, data) for vid, leaf, data in broadcast_calls if leaf == "progression"]
+    assert progression_broadcasts, "Expected at least one 'progression' broadcast over Channels"
+
+    # 2. Each progression payload must have current_status key.
+    for vid, leaf, data in progression_broadcasts:
+        assert "current_status" in data, f"progression payload missing current_status: {data}"
+
+    # 3. MQTT must NEVER have been called with a topic containing "progression".
+    mqtt_topics = [c.args[0] for c in mock_mqtt.publish.call_args_list]
+    progression_mqtt_topics = [t for t in mqtt_topics if "progression" in t]
+    assert not progression_mqtt_topics, (
+        f"progression was illegally published to MQTT topics: {progression_mqtt_topics}"
+    )

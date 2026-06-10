@@ -58,6 +58,7 @@ class Runtime:
     _shapes: Any | None = None
     _stops: Any | None = None
     _mqtt_topic_root: str = "transit/vehicle"
+    _progression_geom: dict[str, list[dict]] = field(default_factory=dict)
 
 
 # Module-level singleton — created once; never replaced.
@@ -93,8 +94,9 @@ async def start_runtime() -> None:
     log.info("runtime.start_runtime(): loading shapes from %s", settings.SHAPES_PATH)
 
     # 1. Load shapes
+    routes: list[Any] = []
     try:
-        shapes, stops, _ = load_shapes(Path(settings.SHAPES_PATH))
+        shapes, stops, routes = load_shapes(Path(settings.SHAPES_PATH))
     except Exception as exc:
         log.error("runtime: failed to load shapes: %s", exc)
         shapes, stops = {}, []
@@ -111,6 +113,27 @@ async def start_runtime() -> None:
     _runtime._shapes = shapes
     _runtime._stops = stops
     _runtime._mqtt_topic_root = settings.MQTT_TOPIC_ROOT
+
+    # 1b. Build progression geometry (shape_id → ordered stop list).
+    #     Requires raw shapes.json point data, not the Shape objects.
+    try:
+        import json as _json
+        from simulator_app.domain.progression.shapes import build_route_geometry as _brg
+
+        _raw = _json.loads(Path(settings.SHAPES_PATH).read_text())
+        _prog_geom: dict[str, list[dict]] = {}
+        for _route in routes:
+            _g = _brg(_route, _raw["shapes"], _raw["stops"])
+            for _s in _g["shapes"]:
+                _prog_geom[_s["shape_id"]] = _s["stops"]
+        _runtime._progression_geom = _prog_geom
+        log.info(
+            "runtime: progression geometry built for %d shapes",
+            len(_prog_geom),
+        )
+    except Exception as exc:
+        log.warning("runtime: could not build progression geometry: %s — progression will be IN_TRANSIT_TO", exc)
+        _runtime._progression_geom = {}
 
     # 3. Connect paho MQTT (best-effort; broker may be absent)
     mqtt_client = None
@@ -243,6 +266,7 @@ async def tick_loop() -> None:
     import orjson
 
     from simulator_app.domain.kinematics import _get_shape, step_vehicle, build_vehicle_payloads
+    from simulator_app.domain.progression.compute import compute_stop_status as _compute_stop_status
     import simulator_app.realtime.broadcast as _broadcast_mod
 
     interval = settings.SIM_TICK_INTERVAL
@@ -295,6 +319,23 @@ async def tick_loop() -> None:
             # (b) push telemetry to browser group via Channels
             for leaf, payload_dict in payloads.items():
                 await _broadcast_mod.broadcast_telemetry(v.vehicle_id, leaf, payload_dict)
+
+            # (c) progression oracle — Channels only, NEVER published to MQTT.
+            _prog_geom = getattr(_runtime, "_progression_geom", None) or {}
+            _shape_id = v.bound_shape_id or v.default_shape_id
+            _shape_stops = _prog_geom.get(_shape_id, [])
+            _pos = payloads["position"]
+            _prev = v._kin.get("progression_prev")
+            _prog = _compute_stop_status(
+                v.progress_m,
+                _pos["latitude"],
+                _pos["longitude"],
+                _shape_stops,
+                speed=_pos.get("speed"),
+                prev_state=_prev,
+            )
+            v._kin["progression_prev"] = _prog
+            await _broadcast_mod.broadcast_telemetry(v.vehicle_id, "progression", _prog)
 
         # Push fleet snapshot to browser after every tick
         if fleet is not None:

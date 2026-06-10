@@ -327,3 +327,86 @@ def test_global_control_reload_schedule(client: APIClient, tmp_sched: Path) -> N
     with patch("simulator_app.api.views.get_runtime", return_value=rt):
         resp = client.post("/sim/control/global/reload_schedule", {}, format="json")
     assert resp.status_code == 200
+
+
+# ---------------------------------------------------------------------------
+# GET /sim/geometry
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture(autouse=False)
+def clear_geometry_cache() -> None:
+    """Reset the module-level geometry cache between geometry tests."""
+    import simulator_app.api.views as v
+
+    v._geometry_cache.clear()
+    yield
+    v._geometry_cache.clear()
+
+
+@pytest.mark.django_db
+def test_geometry_returns_200_with_routes(client: APIClient, clear_geometry_cache: None) -> None:
+    """GET /sim/geometry returns HTTP 200 with a non-empty routes list."""
+    resp = client.get("/sim/geometry")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert "routes" in body
+    assert len(body["routes"]) > 0
+
+
+@pytest.mark.django_db
+def test_geometry_route_ids(client: APIClient, clear_geometry_cache: None) -> None:
+    """Response includes bUCR_L1 and bUCR_L2."""
+    resp = client.get("/sim/geometry")
+    assert resp.status_code == 200
+    route_ids = {r["route_id"] for r in resp.json()["routes"]}
+    assert "bUCR_L1" in route_ids
+    assert "bUCR_L2" in route_ids
+
+
+@pytest.mark.django_db
+def test_geometry_route_structure(client: APIClient, clear_geometry_cache: None) -> None:
+    """Each route has route_id, non-empty shapes, and non-empty stops."""
+    resp = client.get("/sim/geometry")
+    assert resp.status_code == 200
+    for route in resp.json()["routes"]:
+        assert "route_id" in route
+        assert "shapes" in route and len(route["shapes"]) > 0
+        assert "stops" in route and len(route["stops"]) > 0
+
+
+@pytest.mark.django_db
+def test_geometry_shape_latlngs_and_stops(client: APIClient, clear_geometry_cache: None) -> None:
+    """Each shape has latlngs (list of [lat,lon]) and stops with stop_id + ordered progress_m."""
+    resp = client.get("/sim/geometry")
+    assert resp.status_code == 200
+    for route in resp.json()["routes"]:
+        for shape in route["shapes"]:
+            # latlngs must be a non-empty list of two-element pairs
+            assert "latlngs" in shape
+            latlngs = shape["latlngs"]
+            assert len(latlngs) > 0
+            for pair in latlngs:
+                assert len(pair) == 2, f"Expected [lat, lon] pair, got: {pair}"
+
+            # stops must have stop_id and progress_m, ordered non-decreasing
+            assert "stops" in shape
+            stops = shape["stops"]
+            for stop in stops:
+                assert "stop_id" in stop
+                assert "progress_m" in stop
+            progress_values = [s["progress_m"] for s in stops]
+            assert progress_values == sorted(progress_values), (
+                f"stops not ordered by progress_m in shape {shape['shape_id']}"
+            )
+
+
+@pytest.mark.django_db
+def test_geometry_missing_shapes_file_returns_empty(
+    client: APIClient, clear_geometry_cache: None, settings: Any
+) -> None:
+    """When SHAPES_PATH is missing, the view returns {"routes": []} with HTTP 200."""
+    settings.SHAPES_PATH = "/nonexistent/path/shapes.json"
+    resp = client.get("/sim/geometry")
+    assert resp.status_code == 200
+    assert resp.json() == {"routes": []}

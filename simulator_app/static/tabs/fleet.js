@@ -7,14 +7,14 @@ const STATE_CHIP = {
     Requested:   'chip--requested',
     Validated:   'chip--requested',
     Initialized: 'chip--requested',
-    Confirmed:   'chip--confirmed',
-    Tracking:    'chip--tracking',
-    InProgress:  'chip--inprogress',
-    NoSignal:    'chip--nosignal',
-    Completed:   'chip--terminal',
-    Cancelled:   'chip--terminal',
-    Interrupted: 'chip--terminal',
-    ShortTurned: 'chip--terminal',
+    Confirmed:      'chip--confirmed',
+    Tracking:       'chip--tracking',
+    'In Progress':  'chip--inprogress',
+    'No Signal':    'chip--nosignal',
+    Completed:      'chip--terminal',
+    Cancelled:      'chip--terminal',
+    Interrupted:    'chip--terminal',
+    'Short Turned': 'chip--terminal',
 };
 
 let _unsub = null;

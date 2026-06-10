@@ -10,6 +10,7 @@ Route surface (all under /sim/ prefix set in sim_project/urls.py):
   POST runs/track
   POST control/<vehicle_id>/<knob>
   POST control/global/<knob>
+  GET  geometry
 
 All views use AllowAny permission (set as project default in settings.REST_FRAMEWORK).
 Async httpx calls use asgiref.sync.sync_to_async or are invoked via async views
@@ -18,15 +19,18 @@ Async httpx calls use asgiref.sync.sync_to_async or are invoked via async views
 
 from __future__ import annotations
 
+import json
 import logging
 from typing import Any
 
 from asgiref.sync import async_to_sync
+from django.conf import settings
 from rest_framework.decorators import api_view
 from rest_framework.request import Request
 from rest_framework.response import Response
 
 from simulator_app.domain.control import apply_control, apply_global_control
+from simulator_app.domain.progression.shapes import build_route_geometry
 from simulator_app.runtime import get_runtime
 
 from .serializers import (
@@ -207,3 +211,50 @@ def control_global_view(request: Request, knob: str) -> Response:
     payload = request.data if isinstance(request.data, dict) else {}
     apply_global_control(rt, knob, payload)
     return Response({"ok": True})
+
+
+# ---------------------------------------------------------------------------
+# Geometry
+# ---------------------------------------------------------------------------
+
+# Module-level cache so repeated requests don't recompute the (static) geometry.
+_geometry_cache: dict[str, Any] = {}
+
+
+@api_view(["GET"])
+def geometry_view(request: Request) -> Response:
+    """GET /sim/geometry — per-route map geometry (polylines + ordered stops).
+
+    Returns a JSON object with a ``routes`` list.  Each entry is produced by
+    ``build_route_geometry`` and contains:
+
+    * ``route_id``, ``short_name``, ``color``, ``text_color``
+    * ``shapes`` — list of shape dicts with ``shape_id``, ``latlngs``
+      (list of [lat, lon] pairs), and ``stops`` (ordered by progress_m)
+    * ``stops`` — merged unique stops across all shapes of the route
+
+    The result is memoised in a module-level dict on the first successful
+    request; subsequent calls return the cached value without re-reading or
+    reprocessing the shapes file.
+
+    On any read/parse failure returns ``{"routes": []}`` with HTTP 200 and
+    logs a warning — the caller should treat an empty list as "data not yet
+    available" rather than a hard error.
+    """
+    if "data" in _geometry_cache:
+        return Response(_geometry_cache["data"])
+
+    try:
+        with open(settings.SHAPES_PATH, encoding="utf-8") as fh:
+            raw: dict = json.load(fh)
+    except (OSError, ValueError) as exc:
+        log.warning("geometry_view: could not load shapes file %s: %s", settings.SHAPES_PATH, exc)
+        return Response({"routes": []})
+
+    routes_geo = [
+        build_route_geometry(route, raw["shapes"], raw["stops"])
+        for route in raw.get("routes", [])
+    ]
+    result: dict[str, Any] = {"routes": routes_geo}
+    _geometry_cache["data"] = result
+    return Response(result)

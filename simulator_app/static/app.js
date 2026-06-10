@@ -3,6 +3,9 @@
 
 import { connectMqtt } from './lib/ws_client.js';
 import { createSimClient } from './lib/sim_api.js';
+import { initRouteHighlight } from './lib/route_highlight.js';
+import { initRunHighlight } from './lib/run_highlight.js';
+import { runColor } from './lib/run_palette.js';
 import * as fleetTab    from './tabs/fleet.js';
 import * as scheduleTab from './tabs/schedule.js';
 import * as operatorTab from './tabs/operator.js';
@@ -78,36 +81,36 @@ function switchTab(name) {
 // ---- Map ----------------------------------------------------------------
 
 let _map = null;
-let _shapes = null;
 const _vehicleMarkers = new Map(); // vehicle_id → L.Marker
-const _shapePolylines = new Map(); // shape_id → L.Polyline
-const _routeShapeIds  = new Map(); // route_id  → string[]
-let _shapesLoaded = false;
 
-const ACTIVE_LIFECYCLE = new Set(['Confirmed', 'Tracking', 'InProgress', 'NoSignal']);
-
-const MARKER_COLORS = {
-    Confirmed:   '#64748b',
-    Tracking:    '#f59e0b',
-    InProgress:  '#16a34a',
-    NoSignal:    '#f97316',
-    Completed:   '#cbd5e1',
-    Cancelled:   '#cbd5e1',
-    Interrupted: '#cbd5e1',
-    ShortTurned: '#cbd5e1',
-};
-
-function markerColor(state) {
-    return MARKER_COLORS[state] ?? '#94a3b8';
-}
-
-function makeIcon(color) {
+/**
+ * Build a Leaflet divIcon that renders a bearing-rotated directional arrow
+ * (inline SVG chevron) for a vehicle marker.  Clearly larger than a stop dot
+ * (22×22 px vs radius-4 stop circles) and visually distinct via shape, dark
+ * outline, and white drop-shadow halo.
+ *
+ * @param {string}      color    hex fill color (from runColor)
+ * @param {number|null} bearing  travel direction in degrees clockwise from north;
+ *                               null/undefined falls back to 0 (pointing up)
+ * @returns {L.DivIcon}
+ */
+function makeIcon(color, bearing) {
+    const deg = (bearing != null && isFinite(bearing)) ? bearing : 0;
+    // Upward-pointing filled arrowhead path in a 22×22 viewBox.
+    // Centered at (11,11); tip at top, base at bottom with a small notch.
+    const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 22 22">`
+        + `<path d="M11 2 L18 18 L11 14 L4 18 Z"`
+        + ` fill="${color}"`
+        + ` stroke="#1e293b"`
+        + ` stroke-width="1.5"`
+        + ` stroke-linejoin="round"/>`
+        + `</svg>`;
     return L.divIcon({
         className: '',
-        html: `<div style="background:${color};width:12px;height:12px;border-radius:50%;border:2px solid #fff;box-shadow:0 1px 4px rgba(0,0,0,.45);"></div>`,
-        iconSize: [12, 12],
-        iconAnchor: [6, 6],
-        tooltipAnchor: [6, -6],
+        html: `<div style="width:22px;height:22px;transform:rotate(${deg}deg);filter:drop-shadow(0 0 2px #fff) drop-shadow(0 1px 3px rgba(0,0,0,.55));">${svg}</div>`,
+        iconSize:    [22, 22],
+        iconAnchor:  [11, 11],
+        tooltipAnchor: [11, -11],
     });
 }
 
@@ -117,35 +120,6 @@ function initMap() {
         maxZoom: 19,
         attribution: '&copy; OpenStreetMap contributors',
     }).addTo(_map);
-}
-
-async function loadShapes() {
-    try {
-        // shapes.json is served as a static file by Django.
-        const res = await fetch('/static/shapes.json');
-        if (!res.ok) throw new Error(`shapes.json: HTTP ${res.status}`);
-        _shapes = await res.json();
-        _shapesLoaded = true;
-
-        for (const [shapeId, coords] of Object.entries(_shapes.shapes)) {
-            const latlngs = coords.map(([lat, lon]) => [lat, lon]);
-            const poly = L.polyline(latlngs, {
-                color: '#3b82f6',
-                weight: 2.5,
-                opacity: 0.5,
-                interactive: false,
-            });
-            _shapePolylines.set(shapeId, poly);
-        }
-
-        for (const route of _shapes.routes) {
-            _routeShapeIds.set(route.route_id, route.shape_ids);
-        }
-
-        updateMapRoutes();
-    } catch (e) {
-        console.warn('shapes.json load failed — map routes disabled', e);
-    }
 }
 
 function updateMapVehicle(vehicleId, transmitting, lifecycleState, position) {
@@ -158,10 +132,10 @@ function updateMapVehicle(vehicleId, transmitting, lifecycleState, position) {
     }
 
     if (!position) return;
-    const { latitude, longitude } = position;
+    const { latitude, longitude, bearing } = position;
     if (latitude == null || longitude == null) return;
 
-    const icon = makeIcon(markerColor(lifecycleState));
+    const icon = makeIcon(runColor(vehicleId), bearing);
 
     if (_vehicleMarkers.has(vehicleId)) {
         const m = _vehicleMarkers.get(vehicleId);
@@ -171,28 +145,6 @@ function updateMapVehicle(vehicleId, transmitting, lifecycleState, position) {
         const m = L.marker([latitude, longitude], { icon }).addTo(_map);
         m.bindTooltip(vehicleId, { permanent: false, direction: 'top', opacity: 0.9 });
         _vehicleMarkers.set(vehicleId, m);
-    }
-}
-
-function updateMapRoutes() {
-    if (!_shapesLoaded || !_map) return;
-
-    const vehicles = _state.fleet.vehicles || [];
-    const activeRoutes = new Set();
-    for (const v of vehicles) {
-        if (v.bound_run_id && ACTIVE_LIFECYCLE.has(v.lifecycle_state)) {
-            activeRoutes.add(v.route_id);
-        }
-    }
-
-    for (const [routeId, shapeIds] of _routeShapeIds.entries()) {
-        const show = activeRoutes.has(routeId);
-        for (const sid of shapeIds) {
-            const poly = _shapePolylines.get(sid);
-            if (!poly) continue;
-            if (show && !_map.hasLayer(poly)) poly.addTo(_map);
-            else if (!show && _map.hasLayer(poly)) poly.remove();
-        }
     }
 }
 
@@ -219,7 +171,8 @@ function probeSimHealth() {
 
 async function main() {
     initMap();
-    loadShapes();
+    initRouteHighlight(_map);
+    initRunHighlight(_map, store);
 
     const ws = connectMqtt({
         onStatus(connected) {
@@ -233,7 +186,6 @@ async function main() {
         if (!payload || typeof payload !== 'object') return;
         _state.fleet = payload;
         _notify();
-        updateMapRoutes();
         for (const v of _state.fleet.vehicles || []) {
             const pos = _state.telemetry[v.vehicle_id]?.position;
             updateMapVehicle(v.vehicle_id, v.transmitting, v.lifecycle_state, pos);

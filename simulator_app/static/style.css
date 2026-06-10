@@ -598,6 +598,51 @@ dialog.modal::backdrop {
     padding: 0.35rem 0;
 }
 
+/* ---- route highlight control ------------------------------------------- */
+.route-highlight-control {
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+    background: #fff;
+    border: 1px solid #cbd5e1;
+    border-radius: 6px;
+    padding: 0.5rem 0.65rem;
+    box-shadow: 0 1px 5px rgba(0, 0, 0, 0.18);
+    min-width: 150px;
+}
+
+.rhc-label {
+    font-size: 0.72rem;
+    font-weight: 600;
+    color: #475569;
+    letter-spacing: 0.03em;
+    text-transform: uppercase;
+    white-space: nowrap;
+}
+
+.rhc-select {
+    padding: 0.28rem 0.45rem;
+    border: 1px solid #cbd5e1;
+    border-radius: 4px;
+    font-size: 0.82rem;
+    font-family: inherit;
+    background: #f8fafc;
+    color: #0f172a;
+    cursor: pointer;
+    width: 100%;
+}
+
+.rhc-select:focus {
+    outline: 2px solid #3b82f6;
+    outline-offset: 1px;
+    border-color: #3b82f6;
+}
+
+/* ---- run highlight control (stacks below route-highlight in top-right) -- */
+.run-highlight-control {
+    margin-top: 0.4rem;
+}
+
 /* ---- responsive -------------------------------------------------------- */
 @media (max-width: 900px) {
     body { grid-template-rows: auto auto 1fr; overflow: auto; }
