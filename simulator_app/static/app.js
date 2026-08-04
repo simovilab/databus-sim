@@ -5,6 +5,8 @@ import { connectMqtt } from './lib/ws_client.js';
 import { createSimClient } from './lib/sim_api.js';
 import { initRouteHighlight } from './lib/route_highlight.js';
 import { initRunHighlight } from './lib/run_highlight.js';
+import { initNavsatSelector } from './lib/navsat_selector.js';
+import { initMapFullscreen } from './lib/map_fullscreen.js';
 import { runColor } from './lib/run_palette.js';
 import * as fleetTab    from './tabs/fleet.js';
 import * as scheduleTab from './tabs/schedule.js';
@@ -17,6 +19,7 @@ const _state = {
     fleet: { vehicles: [] },
     schedule: { entries: [] },
     telemetry: {}, // vehicle_id → { position?, progression?, occupancy? }
+    navsat: [], // [{ plate_number, latitude, longitude, estado }] — optional overlay
 };
 
 const _subs = new Set();
@@ -116,9 +119,12 @@ function makeIcon(color, bearing) {
 
 function initMap() {
     _map = L.map('map', { zoomControl: true }).setView([9.9365, -84.0511], 16);
-    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-        maxZoom: 19,
-        attribution: '&copy; OpenStreetMap contributors',
+    // CARTO Positron — a designed monochrome basemap (soft grays, light labels),
+    // not a raw OSM tile with a grayscale filter slapped on top.
+    L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', {
+        maxZoom: 20,
+        subdomains: 'abcd',
+        attribution: '&copy; OpenStreetMap contributors &copy; <a href="https://carto.com/attributions">CARTO</a>',
     }).addTo(_map);
 }
 
@@ -173,6 +179,8 @@ async function main() {
     initMap();
     initRouteHighlight(_map);
     initRunHighlight(_map, store);
+    initNavsatSelector(_map, store);
+    initMapFullscreen(_map);
 
     const ws = connectMqtt({
         onStatus(connected) {
@@ -190,6 +198,13 @@ async function main() {
             const pos = _state.telemetry[v.vehicle_id]?.position;
             updateMapVehicle(v.vehicle_id, v.transmitting, v.lifecycle_state, pos);
         }
+    });
+
+    // sim/state/navsat → store (optional overlay; array of {plate_number, latitude, longitude, estado})
+    ws.subscribe('sim/state/navsat', (_topic, payload) => {
+        if (!Array.isArray(payload)) return;
+        _state.navsat = payload;
+        _notify();
     });
 
     // sim/state/schedule → store

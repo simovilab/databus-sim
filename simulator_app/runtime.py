@@ -59,6 +59,8 @@ class Runtime:
     _stops: Any | None = None
     _mqtt_topic_root: str = "transit/vehicle"
     _progression_geom: dict[str, list[dict]] = field(default_factory=dict)
+    _navsat_snapshot: list[dict[str, Any]] = field(default_factory=list)
+    _navsat_client: Any | None = None
 
 
 # Module-level singleton — created once; never replaced.
@@ -191,6 +193,25 @@ async def start_runtime() -> None:
 
     _runtime.scheduler = scheduler
 
+    # 5b. NavSat overlay poller — optional; only starts if NAVSAT_URL is configured.
+    navsat_task: asyncio.Task[Any] | None = None
+    if settings.NAVSAT_URL:
+        from simulator_app.services.navsat_client import NavSatClient
+        from simulator_app.services.navsat_poller import navsat_poll_loop
+
+        navsat_client = NavSatClient(url=settings.NAVSAT_URL)
+        _runtime._navsat_client = navsat_client
+        navsat_task = asyncio.create_task(
+            navsat_poll_loop(navsat_client, settings.NAVSAT_POLL_INTERVAL_S),
+            name="navsat_poll_loop",
+        )
+        log.info(
+            "runtime: NavSat overlay enabled (poll interval=%.1fs)",
+            settings.NAVSAT_POLL_INTERVAL_S,
+        )
+    else:
+        log.info("runtime: NavSat overlay disabled (NAVSAT_URL not set)")
+
     # 6. Wire fleet.on_change → broadcast_fleet (throttled)
     def _on_fleet_change() -> None:
         asyncio.ensure_future(_broadcast_mod_startup.broadcast_fleet(fleet.snapshot()))
@@ -206,6 +227,8 @@ async def start_runtime() -> None:
     scheduler_task = asyncio.create_task(scheduler.run_loop(), name="scheduler")
 
     _runtime._tasks = [tick_task, binder_task, scheduler_task]
+    if navsat_task is not None:
+        _runtime._tasks.append(navsat_task)
 
     log.info(
         "runtime.start_runtime(): %d vehicles, %.1fs tick — 3 background tasks started",
@@ -251,6 +274,15 @@ async def stop_runtime() -> None:
         except Exception as exc:
             log.warning("runtime: DatabusClient close error: %s", exc)
         _runtime.databus = None
+
+    # Close NavSat client
+    if _runtime._navsat_client is not None:
+        try:
+            await _runtime._navsat_client.close()
+            log.info("runtime: NavSat client closed")
+        except Exception as exc:
+            log.warning("runtime: NavSat client close error: %s", exc)
+        _runtime._navsat_client = None
 
     log.info("runtime.stop_runtime() complete.")
 

@@ -10,6 +10,7 @@ Message shapes sent to the browser:
     {"type": "fleet",    "payload": {...}}  — fleet snapshot
     {"type": "schedule", "payload": {...}}  — schedule snapshot
     {"type": "telemetry", "vehicle_id": "...", "leaf": "...", "payload": {...}}
+    {"type": "navsat",   "payload": [...]}   — NavSat overlay snapshot (optional)
 """
 
 from __future__ import annotations
@@ -44,6 +45,10 @@ class FleetConsumer(AsyncJsonWebsocketConsumer):
             await self.send_json(
                 {"type": "schedule", "payload": rt.scheduler.snapshot()}
             )
+        if rt._navsat_snapshot:
+            await self.send_json(
+                {"type": "navsat", "payload": rt._navsat_snapshot}
+            )
 
     async def disconnect(self, code: int) -> None:
         await self.channel_layer.group_discard(self.GROUP, self.channel_name)
@@ -72,5 +77,7 @@ class FleetConsumer(AsyncJsonWebsocketConsumer):
                     "payload": event["payload"],
                 }
             )
+        elif kind == "navsat":
+            await self.send_json({"type": "navsat", "payload": event["payload"]})
         else:
             log.debug("FleetConsumer: unknown event kind %r", kind)

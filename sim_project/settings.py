@@ -192,6 +192,15 @@ SIM_RANDOM_DROP_RATE: int = int(os.environ.get("SIM_RANDOM_DROP_RATE", "0"))
 SIM_STOP_ALL_AFTER: int = int(os.environ.get("SIM_STOP_ALL_AFTER", "0"))
 
 # ---------------------------------------------------------------------------
+# NavSat overlay (optional) — real-world vehicle positions shown on the map
+# alongside the simulated fleet. NAVSAT_URL embeds a vendor API token: treat
+# it as a secret (env var only, never hardcoded, never logged). Leaving it
+# unset disables the feature entirely — no vendor account needed to run the sim.
+# ---------------------------------------------------------------------------
+NAVSAT_URL: str = os.environ.get("NAVSAT_URL", "")
+NAVSAT_POLL_INTERVAL_S: float = float(os.environ.get("NAVSAT_POLL_INTERVAL_S", "10"))
+
+# ---------------------------------------------------------------------------
 # Logging — structured, sensible defaults for a dev tool
 # ---------------------------------------------------------------------------
 
@@ -213,6 +222,13 @@ LOGGING = {
     "root": {
         "handlers": ["console"],
         "level": os.environ.get("LOG_LEVEL", "INFO"),
+    },
+    # httpx/httpcore log each outgoing request URL at INFO — NAVSAT_URL embeds
+    # a vendor API token in its path, so that would otherwise leak the secret
+    # to logs on every poll. Silenced regardless of LOG_LEVEL.
+    "loggers": {
+        "httpx": {"level": "WARNING", "handlers": ["console"], "propagate": False},
+        "httpcore": {"level": "WARNING", "handlers": ["console"], "propagate": False},
     },
 }
 

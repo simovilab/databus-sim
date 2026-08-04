@@ -66,6 +66,10 @@ function routeMessage(msg) {
             return [{ topic: 'sim/state/schedule', payload: normalised }];
         }
 
+        case 'navsat':
+            // NavSat overlay snapshot: array of { plate_number, latitude, longitude, estado }.
+            return [{ topic: 'sim/state/navsat', payload: msg.payload }];
+
         case 'telemetry':
             // old: transit/vehicle/<id>/<leaf> → payload = leaf data
             if (msg.vehicle_id && msg.leaf) {

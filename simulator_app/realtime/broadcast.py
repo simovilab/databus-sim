@@ -73,6 +73,11 @@ async def broadcast_schedule(snapshot: dict[str, Any]) -> None:
     await _group_send({"type": "fleet.update", "kind": "schedule", "payload": snapshot})
 
 
+async def broadcast_navsat(snapshot: list[dict[str, Any]]) -> None:
+    """Send the NavSat vehicle snapshot to all WebSocket clients (no throttle)."""
+    await _group_send({"type": "fleet.update", "kind": "navsat", "payload": snapshot})
+
+
 async def broadcast_telemetry(
     vehicle_id: str, leaf: str, data: dict[str, Any]
 ) -> None:

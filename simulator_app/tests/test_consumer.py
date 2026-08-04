@@ -29,6 +29,7 @@ def _make_runtime(fleet: FleetState | None = None) -> MagicMock:
     rt.fleet = fleet or _make_fleet()
     rt.scheduler = MagicMock()
     rt.scheduler.snapshot.return_value = {"defaults": {}, "runs": [], "published_at": "now"}
+    rt._navsat_snapshot = []
     return rt
 
 
@@ -82,5 +83,59 @@ async def test_consumer_receives_fleet_broadcast() -> None:
 
         msg = await communicator.receive_json_from(timeout=2)
         assert msg["type"] == "fleet"
+
+        await communicator.disconnect()
+
+
+@pytest.mark.asyncio
+@pytest.mark.django_db(transaction=True)
+async def test_consumer_replays_navsat_snapshot_to_late_joiners() -> None:
+    """A non-empty cached NavSat snapshot is sent immediately on connect."""
+    fleet = _make_fleet()
+    rt = _make_runtime(fleet=fleet)
+    rt._navsat_snapshot = [
+        {"plate_number": "SJB1234", "latitude": 9.9, "longitude": -84.0, "estado": "movimiento"}
+    ]
+
+    with patch("simulator_app.realtime.consumers.get_runtime", return_value=rt):
+        communicator = WebsocketCommunicator(application, "/ws/fleet/")
+        connected, _ = await communicator.connect()
+        assert connected
+
+        await communicator.receive_json_from(timeout=2)  # fleet
+        await communicator.receive_json_from(timeout=2)  # schedule
+
+        navsat_msg = await communicator.receive_json_from(timeout=2)
+        assert navsat_msg["type"] == "navsat"
+        assert navsat_msg["payload"] == rt._navsat_snapshot
+
+        await communicator.disconnect()
+
+
+@pytest.mark.asyncio
+@pytest.mark.django_db(transaction=True)
+async def test_consumer_receives_navsat_broadcast() -> None:
+    """A navsat snapshot pushed via broadcast_navsat reaches connected consumers."""
+    from simulator_app.realtime.broadcast import broadcast_navsat
+
+    fleet = _make_fleet()
+    rt = _make_runtime(fleet=fleet)
+
+    with patch("simulator_app.realtime.consumers.get_runtime", return_value=rt):
+        communicator = WebsocketCommunicator(application, "/ws/fleet/")
+        connected, _ = await communicator.connect()
+        assert connected
+
+        await communicator.receive_json_from(timeout=2)  # fleet
+        await communicator.receive_json_from(timeout=2)  # schedule
+
+        snapshot = [
+            {"plate_number": "A111", "latitude": 9.9, "longitude": -84.0, "estado": "detenido"}
+        ]
+        await broadcast_navsat(snapshot)
+
+        msg = await communicator.receive_json_from(timeout=2)
+        assert msg["type"] == "navsat"
+        assert msg["payload"] == snapshot
 
         await communicator.disconnect()
