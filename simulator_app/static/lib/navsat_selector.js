@@ -32,6 +32,8 @@ export function initNavsatSelector(map, store) {
 
     /** @type {HTMLDivElement|null} */
     let _panel = null;
+    /** @type {HTMLButtonElement|null} */
+    let _toggle = null;
     let _open = false;
 
     // ---- Build Leaflet custom control -------------------------------------
@@ -44,7 +46,7 @@ export function initNavsatSelector(map, store) {
 
             const toggle = L.DomUtil.create('button', 'navsat-toggle', container);
             toggle.type = 'button';
-            toggle.textContent = 'NavSat buses ▾';
+            _toggle = toggle;
 
             const panel = L.DomUtil.create('div', 'navsat-panel', container);
             panel.hidden = true;
@@ -56,7 +58,10 @@ export function initNavsatSelector(map, store) {
             toggle.addEventListener('click', () => {
                 _open = !_open;
                 panel.hidden = !_open;
+                _renderToggleLabel();
             });
+
+            _renderToggleLabel();
 
             _renderPanel();
 
@@ -70,6 +75,12 @@ export function initNavsatSelector(map, store) {
     _onStoreUpdate(store.get());
 
     // ---- Internal helpers ---------------------------------------------------
+
+    /** Reflect the open/closed state in the toggle button's arrow. */
+    function _renderToggleLabel() {
+        if (!_toggle) return;
+        _toggle.textContent = `NavSat buses ${_open ? '▴' : '▾'}`;
+    }
 
     /** @returns {Array<{plate_number:string, latitude:number, longitude:number, estado:string}>} */
     function _knownVehicles() {

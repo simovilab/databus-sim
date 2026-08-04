@@ -50,6 +50,10 @@ services:
       # ── Django ────────────────────────────────────────────────────────────
       DEBUG: ${DEBUG:-false}
 
+      # ── NavSat map overlay (optional) — see .env.example. Empty disables it. ─
+      NAVSAT_URL: ${NAVSAT_URL:-}
+      NAVSAT_POLL_INTERVAL_S: ${NAVSAT_POLL_INTERVAL_S:-10}
+
     ports:
       # UI + API + WS all on one port — no nginx, no separate WS port.
       - "${WEB_PORT:-8080}:${WEB_PORT:-8080}"

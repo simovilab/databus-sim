@@ -671,7 +671,6 @@ dialog.modal::backdrop {
 .navsat-toggle:hover { background: #f1f5f9; }
 
 .navsat-panel {
-    display: flex;
     flex-direction: column;
     gap: 0.3rem;
     padding: 0.45rem 0.65rem 0.55rem;
@@ -679,6 +678,13 @@ dialog.modal::backdrop {
     max-height: 220px;
     overflow-y: auto;
     min-width: 170px;
+}
+
+/* `hidden` must win over the flex display below — without :not([hidden]),
+   this rule's display:flex overrides the UA default display:none for
+   [hidden], since author styles beat user-agent styles at equal specificity. */
+.navsat-panel:not([hidden]) {
+    display: flex;
 }
 
 .navsat-row {

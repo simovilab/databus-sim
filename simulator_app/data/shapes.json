@@ -4,7 +4,7 @@
       "route_id": "bUCR_L1",
       "short_name": "bUCR L1",
       "long_name": "Bus interno UCR sin milla",
-      "color": "00C0F3",
+      "color": "4169E1",
       "text_color": "FFFFFF",
       "shape_ids": [
         "desde_artes_sin_milla",
