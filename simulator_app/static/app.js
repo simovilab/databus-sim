@@ -8,6 +8,7 @@ import { initRunHighlight } from './lib/run_highlight.js';
 import { initNavsatSelector } from './lib/navsat_selector.js';
 import { initMapFullscreen } from './lib/map_fullscreen.js';
 import { runColor } from './lib/run_palette.js';
+import { makeArrowIcon } from './lib/vehicle_icon.js';
 import * as fleetTab    from './tabs/fleet.js';
 import * as scheduleTab from './tabs/schedule.js';
 import * as operatorTab from './tabs/operator.js';
@@ -86,37 +87,6 @@ function switchTab(name) {
 let _map = null;
 const _vehicleMarkers = new Map(); // vehicle_id → L.Marker
 
-/**
- * Build a Leaflet divIcon that renders a bearing-rotated directional arrow
- * (inline SVG chevron) for a vehicle marker.  Clearly larger than a stop dot
- * (22×22 px vs radius-4 stop circles) and visually distinct via shape, dark
- * outline, and white drop-shadow halo.
- *
- * @param {string}      color    hex fill color (from runColor)
- * @param {number|null} bearing  travel direction in degrees clockwise from north;
- *                               null/undefined falls back to 0 (pointing up)
- * @returns {L.DivIcon}
- */
-function makeIcon(color, bearing) {
-    const deg = (bearing != null && isFinite(bearing)) ? bearing : 0;
-    // Upward-pointing filled arrowhead path in a 22×22 viewBox.
-    // Centered at (11,11); tip at top, base at bottom with a small notch.
-    const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 22 22">`
-        + `<path d="M11 2 L18 18 L11 14 L4 18 Z"`
-        + ` fill="${color}"`
-        + ` stroke="#1e293b"`
-        + ` stroke-width="1.5"`
-        + ` stroke-linejoin="round"/>`
-        + `</svg>`;
-    return L.divIcon({
-        className: '',
-        html: `<div style="width:22px;height:22px;transform:rotate(${deg}deg);filter:drop-shadow(0 0 2px #fff) drop-shadow(0 1px 3px rgba(0,0,0,.55));">${svg}</div>`,
-        iconSize:    [22, 22],
-        iconAnchor:  [11, 11],
-        tooltipAnchor: [11, -11],
-    });
-}
-
 function initMap() {
     _map = L.map('map', { zoomControl: true }).setView([9.9365, -84.0511], 16);
     // CARTO Positron — a designed monochrome basemap (soft grays, light labels),
@@ -141,7 +111,7 @@ function updateMapVehicle(vehicleId, transmitting, lifecycleState, position) {
     const { latitude, longitude, bearing } = position;
     if (latitude == null || longitude == null) return;
 
-    const icon = makeIcon(runColor(vehicleId), bearing);
+    const icon = makeArrowIcon(runColor(vehicleId), bearing);
 
     if (_vehicleMarkers.has(vehicleId)) {
         const m = _vehicleMarkers.get(vehicleId);

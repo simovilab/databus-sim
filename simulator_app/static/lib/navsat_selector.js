@@ -4,8 +4,16 @@
 // Each row shows the vendor's raw `estado` value verbatim in parentheses
 // (e.g. "SJB1234 (movimiento)" / "SJB1234 (detenido)") — not reinterpreted
 // or translated. Selection is in-memory only (module state), reset on reload.
+//
+// Markers render as the same directional arrow used for simulated buses. The
+// vendor API carries no heading field, so bearing is derived client-side from
+// consecutive position fixes (previous → current fix on each poll); it holds
+// steady between polls and while a bus is stationary.
+
+import { makeArrowIcon, bearingDeg } from './vehicle_icon.js';
 
 const NAVSAT_MARKER_COLOR = '#7c3aed'; // distinct from sim-fleet chevrons
+const MIN_FIX_DELTA_DEG = 1e-5; // ~1m; ignore GPS jitter when deriving bearing
 
 /**
  * Create and add a "NavSat buses" selector control to the given map.
@@ -17,7 +25,9 @@ const NAVSAT_MARKER_COLOR = '#7c3aed'; // distinct from sim-fleet chevrons
  */
 export function initNavsatSelector(map, store) {
     const _selected = new Set(); // plate_number
-    const _markers = new Map(); // plate_number → L.CircleMarker
+    const _markers = new Map(); // plate_number → L.Marker
+    const _lastFix = new Map(); // plate_number → { lat, lon }
+    const _bearings = new Map(); // plate_number → last-known heading (degrees)
     const _markerLayer = L.layerGroup().addTo(map);
 
     /** @type {HTMLDivElement|null} */
@@ -126,24 +136,45 @@ export function initNavsatSelector(map, store) {
             const v = byPlate.get(plate);
             if (!v || v.latitude == null || v.longitude == null) continue;
 
-            const tooltipText = `${plate} (${v.estado || 'unknown'})`;
+            const bearing = _updateBearing(plate, v.latitude, v.longitude);
+            const icon = makeArrowIcon(NAVSAT_MARKER_COLOR, bearing);
 
             if (_markers.has(plate)) {
                 const marker = _markers.get(plate);
                 marker.setLatLng([v.latitude, v.longitude]);
-                marker.setTooltipContent(tooltipText);
+                marker.setIcon(icon);
             } else {
-                const marker = L.circleMarker([v.latitude, v.longitude], {
-                    radius: 7,
-                    color: '#fff',
-                    weight: 2,
-                    fillColor: NAVSAT_MARKER_COLOR,
-                    fillOpacity: 0.95,
-                }).addTo(_markerLayer);
-                marker.bindTooltip(tooltipText, { permanent: false, direction: 'top', opacity: 0.9 });
+                const marker = L.marker([v.latitude, v.longitude], { icon }).addTo(_markerLayer);
+                marker.bindTooltip(plate, { permanent: false, direction: 'top', opacity: 0.9 });
                 _markers.set(plate, marker);
             }
         }
+    }
+
+    /**
+     * Derive this plate's current heading from the delta between its previous
+     * and current fix, and remember both for next time. Falls back to the
+     * last-known heading (or 0) when the fix hasn't moved enough to trust a
+     * bearing computed from it (stationary bus, or first-ever fix).
+     *
+     * @param {string} plate
+     * @param {number} lat
+     * @param {number} lon
+     * @returns {number} degrees clockwise from north
+     */
+    function _updateBearing(plate, lat, lon) {
+        const prev = _lastFix.get(plate);
+        _lastFix.set(plate, { lat, lon });
+
+        if (prev) {
+            const moved = Math.abs(lat - prev.lat) > MIN_FIX_DELTA_DEG
+                || Math.abs(lon - prev.lon) > MIN_FIX_DELTA_DEG;
+            if (moved) {
+                _bearings.set(plate, bearingDeg(prev.lat, prev.lon, lat, lon));
+            }
+        }
+
+        return _bearings.get(plate) ?? 0;
     }
 
     /**
