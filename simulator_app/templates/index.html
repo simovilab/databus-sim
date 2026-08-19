@@ -1,0 +1,45 @@
+{% load static %}
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>SIMOVI Simulator</title>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <link rel="stylesheet" href="{% static 'style.css' %}" />
+</head>
+<body>
+    <header class="topbar">
+        <h1 class="topbar__title">SIMOVI Simulator</h1>
+        <div class="topbar__status">
+            <span id="broker-status" class="badge badge--off">broker: disconnected</span>
+            <span id="sim-status" class="badge badge--off">sim: offline</span>
+        </div>
+    </header>
+
+    <nav class="tabs" id="tab-strip" role="tablist">
+        <button class="tab tab--active" data-tab="fleet" role="tab" aria-selected="true">Fleet</button>
+        <button class="tab" data-tab="schedule" role="tab" aria-selected="false">Schedule</button>
+        <button class="tab" data-tab="operator" role="tab" aria-selected="false">Operator</button>
+        <button class="tab" data-tab="runs" role="tab" aria-selected="false">Runs</button>
+    </nav>
+
+    <main class="layout">
+        <section class="layout__panel" id="tab-content">
+            <div data-tab-panel="fleet" class="tab-panel tab-panel--active" role="tabpanel"></div>
+            <div data-tab-panel="schedule" class="tab-panel" role="tabpanel" hidden></div>
+            <div data-tab-panel="operator" class="tab-panel" role="tabpanel" hidden></div>
+            <div data-tab-panel="runs" class="tab-panel" role="tabpanel" hidden></div>
+        </section>
+        <aside class="layout__map">
+            <div id="map"></div>
+        </aside>
+    </main>
+
+    <div id="modal-root"></div>
+
+    <!-- Leaflet (CDN) — no MQTT.js; transport is now a Django Channels WebSocket -->
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script type="module" src="{% static 'app.js' %}"></script>
+</body>
+</html>

@@ -1,60 +1,65 @@
-version: '3.8'
+# SIMOVI Simulator — single-service compose file.
+#
+# ─────────────────────────────────────────────────────────────────────────────
+# IMPORTANT: ONE service only. ws-bridge, web, and nginx are gone.
+# The simulator now serves the browser UI, REST API, and WebSocket from a
+# single uvicorn process on WEB_PORT. See PLAN §4 and §10.
+# ─────────────────────────────────────────────────────────────────────────────
+#
+# SINGLE-WORKER INVARIANT: uvicorn runs with NO --workers flag inside the image.
+# Do NOT scale this service (docker compose up --scale simulator=N) — the
+# InMemoryChannelLayer and in-memory FleetState require exactly ONE process.
+# If you need to scale in future, switch to Redis channel layer + external state.
+#
+# SECURITY GUARDRAIL: do not publish WEB_PORT to an untrusted network.
+# AllowAny on all endpoints is deliberate for a local/dev tool; the /databus/
+# proxy (Phase 7) would otherwise be an open gateway to the databus write API.
 
 services:
-  redis:
-    image: redis:7-alpine
-    ports:
-      - "6379:6379"
-    volumes:
-      - redis_data:/data
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 10s
-      timeout: 3s
-      retries: 5
-
-  app:
-    build: .
-    volumes:
-      - .:/app
-      - ./assets:/app/assets
-    environment:
-      - CELERY_BROKER_URL=redis://redis:6379/0
-      - CELERY_RESULT_BACKEND=redis://redis:6379/0
-    depends_on:
-      redis:
-        condition: service_healthy
-    ports:
-      - "8000:8000"
-    command: uv run python main.py
-
-  celery_worker:
-    build: .
-    volumes:
-      - .:/app
-      - ./assets:/app/assets
-    environment:
-      - CELERY_BROKER_URL=redis://redis:6379/0
-      - CELERY_RESULT_BACKEND=redis://redis:6379/0
-    depends_on:
-      redis:
-        condition: service_healthy
-    command: uv run celery -A tasks worker --loglevel=info
+  simulator:
+    build:
+      context: .
     restart: unless-stopped
 
-  celery_beat:
-    build: .
-    volumes:
-      - .:/app
-      - ./assets:/app/assets
-    environment:
-      - CELERY_BROKER_URL=redis://redis:6379/0
-      - CELERY_RESULT_BACKEND=redis://redis:6379/0
-    depends_on:
-      redis:
-        condition: service_healthy
-    command: uv run celery -A tasks beat --loglevel=info
-    restart: unless-stopped
+    # Reach services on the host (databus broker, REST API) via host.docker.internal.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
 
-volumes:
-  redis_data:
+    environment:
+      # ── Web ──────────────────────────────────────────────────────────────
+      WEB_PORT: ${WEB_PORT:-8080}
+
+      # ── MQTT → databus telemetry-broker ──────────────────────────────────
+      MQTT_HOST: ${DATABUS_MQTT_HOST:-host.docker.internal}
+      MQTT_PORT: ${DATABUS_MQTT_PORT:-1883}
+      MQTT_TOPIC_ROOT: ${MQTT_TOPIC_ROOT:-transit/vehicle}
+
+      # ── Databus HTTP REST ─────────────────────────────────────────────────
+      DATABUS_BASE_URL: >-
+        http://${DATABUS_HOST:-host.docker.internal}:${DATABUS_HTTP_PORT:-8000}
+
+      # ── Schedule file (bind-mounted below for live host edits) ─────────────
+      SCHEDULE_PATH: /app/schedule.yaml
+
+      # ── Tick / poll intervals ─────────────────────────────────────────────
+      SIM_TICK_INTERVAL: ${SIM_TICK_INTERVAL:-2.0}
+      POST_RUN_IDLE_S: ${POST_RUN_IDLE_S:-30}
+      RUN_POLL_INTERVAL_S: ${RUN_POLL_INTERVAL_S:-2.0}
+      SCHEDULER_TICK_S: ${SCHEDULER_TICK_S:-1.0}
+
+      # ── Django ────────────────────────────────────────────────────────────
+      DEBUG: ${DEBUG:-false}
+
+      # ── NavSat map overlay (optional) — see .env.example. Empty disables it. ─
+      NAVSAT_URL: ${NAVSAT_URL:-}
+      NAVSAT_POLL_INTERVAL_S: ${NAVSAT_POLL_INTERVAL_S:-10}
+
+    ports:
+      # UI + API + WS all on one port — no nginx, no separate WS port.
+      - "${WEB_PORT:-8080}:${WEB_PORT:-8080}"
+
+    volumes:
+      # schedule.yaml is bind-mounted (read-write) so operators can edit it on
+      # the host without rebuilding AND the Schedule tab's PUT /sim/schedule can
+      # write it back. Source is the canonical data file under simulator_app/.
+      - ./simulator_app/data/schedule.yaml:/app/schedule.yaml
