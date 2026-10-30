@@ -1,2 +1,15 @@
-.pynb_checkpoints/
+.ipynb_checkpoints/
 .venv/
+.venv
+__pycache__/
+*.pyc
+.DS_Store
+
+# Local port/host overrides — copy from .env.example
+.env
+
+# Django / build / test artifacts
+db.sqlite3
+staticfiles/
+.coverage
+htmlcov/

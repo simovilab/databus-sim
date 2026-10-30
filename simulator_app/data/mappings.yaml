@@ -1,0 +1,388 @@
+# mappings.yaml — single place to translate FSM event/action names → concrete observables.
+# Update this file when databus renames exchanges, topics, or endpoints.
+# The harness cross-checks this against every FSM JSON on startup and warns on gaps.
+
+events:
+  # register-run FSM
+  backend.RUN_SUBMISSION_REQUESTED:
+    transport: amqp
+    exchange: databus.commands
+    routing_key: run.submission.requested
+
+  backend.RUN_SUBMISSION_SUCCEEDED:
+    transport: amqp
+    exchange: databus.commands
+    routing_key: run.submission.succeeded
+
+  backend.RUN_SUBMISSION_FAILED:
+    transport: amqp
+    exchange: databus.commands
+    routing_key: run.submission.failed
+
+  realtime_engine.RUN_VALIDATION_SUCCEEDED:
+    transport: amqp
+    exchange: databus.observations
+    routing_key: run.validation.succeeded
+
+  realtime_engine.RUN_VALIDATION_FAILED:
+    transport: amqp
+    exchange: databus.observations
+    routing_key: run.validation.failed
+
+  backend.RUN_NOTIFICATION_SENT:
+    transport: amqp
+    exchange: databus.commands
+    routing_key: run.notification.sent
+
+  realtime_engine.RUN_INITIALIZATION_SUCCEEDED:
+    transport: amqp
+    exchange: databus.observations
+    routing_key: run.initialization.succeeded
+
+  realtime_engine.RUN_INITIALIZATION_FAILED:
+    transport: amqp
+    exchange: databus.observations
+    routing_key: run.initialization.failed
+
+  realtime_engine.RUN_CONFIRMATION_SUCCEEDED:
+    transport: amqp
+    exchange: databus.observations
+    routing_key: run.confirmation.succeeded
+
+  realtime_engine.RUN_CONFIRMATION_FAILED:
+    transport: amqp
+    exchange: databus.observations
+    routing_key: run.confirmation.failed
+
+  # ingest-telemetry FSM
+  telemetry_broker.TELEMETRY_RECEIVED:
+    transport: mqtt
+    topic_pattern: "transit/vehicle/+/data"
+
+  realtime_engine.TELEMETRY_VALIDATION_SUCCEEDED:
+    transport: amqp
+    exchange: databus.observations
+    routing_key: telemetry.validation.succeeded
+
+  realtime_engine.TELEMETRY_VALIDATION_FAILED:
+    transport: amqp
+    exchange: databus.observations
+    routing_key: telemetry.validation.failed
+
+  realtime_engine.TELEMETRY_PROCESSING_SUCCEEDED:
+    transport: amqp
+    exchange: databus.observations
+    routing_key: telemetry.processing.succeeded
+
+  realtime_engine.TELEMETRY_PROCESSING_FAILED:
+    transport: amqp
+    exchange: databus.observations
+    routing_key: telemetry.processing.failed
+
+  realtime_engine.TELEMETRY_NOTIFICATION_SENT:
+    transport: amqp
+    exchange: databus.observations
+    routing_key: telemetry.notification.sent
+
+  # update-system-state FSM
+  realtime_engine.STATE_UPDATE_REQUESTED:
+    transport: amqp
+    exchange: databus.observations
+    routing_key: state.update.requested
+
+  realtime_engine.STATE_FETCH_SUCCEEDED:
+    transport: amqp
+    exchange: databus.observations
+    routing_key: state.fetch.succeeded
+
+  realtime_engine.STATE_FETCH_FAILED:
+    transport: amqp
+    exchange: databus.observations
+    routing_key: state.fetch.failed
+
+  realtime_engine.STATE_EVALUATED:
+    transport: amqp
+    exchange: databus.observations
+    routing_key: state.evaluated
+
+  realtime_engine.STATE_UPDATE_SUCCEEDED:
+    transport: amqp
+    exchange: databus.observations
+    routing_key: state.update.succeeded
+
+  realtime_engine.STATE_UPDATE_FAILED:
+    transport: amqp
+    exchange: databus.observations
+    routing_key: state.update.failed
+
+  realtime_engine.STATE_NOTIFICATION_SENT:
+    transport: amqp
+    exchange: databus.observations
+    routing_key: state.notification.sent
+
+  # build-gtfs-realtime FSM
+  scheduler.BUILD_TRIGGERED:
+    transport: amqp
+    exchange: databus.commands
+    routing_key: build.triggered
+
+  tasks.SNAPSHOT_SUCCEEDED:
+    transport: amqp
+    exchange: databus.assertions
+    routing_key: snapshot.succeeded
+
+  tasks.SNAPSHOT_FAILED:
+    transport: amqp
+    exchange: databus.assertions
+    routing_key: snapshot.failed
+
+  tasks.BUILD_SUCCEEDED:
+    transport: amqp
+    exchange: databus.assertions
+    routing_key: build.succeeded
+
+  tasks.BUILD_FAILED:
+    transport: amqp
+    exchange: databus.assertions
+    routing_key: build.failed
+
+  tasks.PUBLISH_SUCCEEDED:
+    transport: amqp
+    exchange: databus.assertions
+    routing_key: publish.succeeded
+
+  tasks.PUBLISH_FAILED:
+    transport: amqp
+    exchange: databus.assertions
+    routing_key: publish.failed
+
+  tasks.BUILD_NOTIFICATION_SENT:
+    transport: amqp
+    exchange: databus.assertions
+    routing_key: build.notification.sent
+
+  # save-gtfs-feed-messages FSM
+  tasks.SAVE_TRIGGERED:
+    transport: amqp
+    exchange: databus.commands
+    routing_key: save.triggered
+
+  tasks.SERIALIZATION_SUCCEEDED:
+    transport: amqp
+    exchange: databus.assertions
+    routing_key: serialization.succeeded
+
+  tasks.SERIALIZATION_FAILED:
+    transport: amqp
+    exchange: databus.assertions
+    routing_key: serialization.failed
+
+  tasks.PERSIST_SUCCEEDED:
+    transport: amqp
+    exchange: databus.assertions
+    routing_key: persist.succeeded
+
+  tasks.PERSIST_FAILED:
+    transport: amqp
+    exchange: databus.assertions
+    routing_key: persist.failed
+
+  tasks.SAVE_NOTIFICATION_SENT:
+    transport: amqp
+    exchange: databus.assertions
+    routing_key: save.notification.sent
+
+actions:
+  # register-run actions
+  backend.validate_payload:
+    kind: log_or_noop
+
+  backend.send_run_validation_request:
+    transport: amqp
+    exchange: databus.commands
+    routing_key: run.validate
+
+  realtime_engine.check_vehicle_availability:
+    kind: log_or_noop
+
+  realtime_engine.check_trip_availability:
+    kind: log_or_noop
+
+  realtime_engine.validate_schedule:
+    kind: log_or_noop
+
+  backend.send_notifications:
+    kind: log_or_noop
+
+  realtime_engine.flush_data:
+    kind: log_or_noop
+
+  backend.log_errors:
+    kind: log_or_noop
+
+  realtime_engine.write_run_metadata:
+    transport: redis
+    key_pattern: "run:{run_id}"
+
+  realtime_engine.emit_initialization_observation:
+    transport: amqp
+    exchange: databus.observations
+    routing_key: run.initialized
+
+  backend.request_operator_confirmation:
+    transport: http
+    url_pattern: "{backend}/api/run/{run_id}/confirm/"
+
+  realtime_engine.start_run:
+    transport: amqp
+    exchange: databus.observations
+    routing_key: run.started
+
+  # ingest-telemetry actions
+  parseMqttPayload:
+    kind: log_or_noop
+
+  checkActiveRun:
+    kind: log_or_noop
+
+  validateCoordinates:
+    kind: log_or_noop
+
+  validateTimestamp:
+    kind: log_or_noop
+
+  normalizePayload:
+    kind: log_or_noop
+
+  associateRunContext:
+    kind: log_or_noop
+
+  markReadyForStateUpdate:
+    kind: log_or_noop
+
+  requestStateUpdate:
+    transport: amqp
+    exchange: databus.observations
+    routing_key: state.update.requested
+
+  sendNotifications:
+    kind: log_or_noop
+
+  logErrors:
+    kind: log_or_noop
+
+  # update-system-state actions
+  loadCurrentVehicleState:
+    transport: redis
+    key_pattern: "vehicle:{vehicle_id}:state"
+
+  loadValidatedDatum:
+    transport: redis
+    key_pattern: "telemetry:{vehicle_id}:validated"
+
+  runFsmLogic:
+    kind: log_or_noop
+
+  determineStopProximity:
+    kind: log_or_noop
+
+  calculateDerivedFields:
+    kind: log_or_noop
+
+  recordChanges:
+    kind: log_or_noop
+
+  snapToRouteShape:
+    kind: log_or_noop
+
+  writeVehiclePosition:
+    transport: db
+    table: vehicle_position
+
+  writeVehicleProgression:
+    transport: db
+    table: vehicle_progression
+
+  writeVehicleOccupancy:
+    transport: db
+    table: vehicle_occupancy
+
+  updateRunMetadata:
+    transport: db
+    table: run
+
+  publishObservation:
+    transport: amqp
+    exchange: databus.observations
+    routing_key: vehicle.state.updated
+
+  # update-system-state notifying
+  # (sendNotifications, logErrors already mapped above)
+
+  # build-gtfs-realtime actions
+  tasks.read_active_runs:
+    transport: db
+    table: run
+
+  tasks.read_vehicle_states:
+    transport: redis
+    key_pattern: "vehicle:*:state"
+
+  tasks.read_stop_time_updates:
+    transport: db
+    table: stop_time_update
+
+  tasks.poll_gtfs_schedule:
+    kind: log_or_noop
+
+  tasks.build_vehicle_positions_feed:
+    kind: log_or_noop
+
+  tasks.build_trip_updates_feed:
+    kind: log_or_noop
+
+  tasks.set_feed_headers:
+    kind: log_or_noop
+
+  tasks.publish_feed_files:
+    transport: http
+    url_pattern: "{backend}/gtfs/realtime/{feed_type}.pb"
+
+  tasks.emit_publication_assertion:
+    transport: amqp
+    exchange: databus.assertions
+    routing_key: feed.published
+
+  tasks.send_notifications:
+    kind: log_or_noop
+
+  tasks.log_errors:
+    kind: log_or_noop
+
+  tasks.flush_data:
+    kind: log_or_noop
+
+  # save-gtfs-feed-messages actions
+  tasks.receive_feed_data:
+    kind: log_or_noop
+
+  tasks.convert_to_parquet:
+    kind: log_or_noop
+
+  tasks.enrich_metadata:
+    kind: log_or_noop
+
+  tasks.calculate_blob_size:
+    kind: log_or_noop
+
+  tasks.persist_parquet_file:
+    transport: file
+    path_pattern: "{lake_dir}/gtfs_rt/{feed_type}/{snapshot_timestamp}.parquet"
+
+  tasks.emit_persistence_assertion:
+    transport: amqp
+    exchange: databus.assertions
+    routing_key: feed.persisted
+
+  tasks.clear_feed_data:
+    kind: log_or_noop
